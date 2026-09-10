@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Asset Management System — план этажа</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="toolbar">
+      <button id="btn-select" type="button" class="active">Выбор / перемещение</button>
+      <button id="btn-draw-wall" type="button">Рисовать стены</button>
+      <label class="thickness-label">
+        Толщина стены, см
+        <input id="input-thickness" type="number" min="2" max="60" step="1" value="10" />
+      </label>
+      <label id="btn-load-plan" class="file-button">
+        Загрузить план
+        <input id="input-plan" type="file" accept="image/*" hidden />
+      </label>
+    </div>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
