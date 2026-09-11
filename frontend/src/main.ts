@@ -2,6 +2,7 @@ import './styles.css';
 import { FloorPlanCanvas } from './components/FloorPlanCanvas';
 import { cm } from './utils/scale';
 import type { WorkspaceStatus } from './types/workspace';
+import { loadFloorPlan, saveFloorPlan } from './api/floorPlans';
 
 // #app больше не на весь экран — тулбар занимает свою полосу в потоке (см.
 // styles.css), поэтому размер сцены берём из самого контейнера, а не из
@@ -29,6 +30,9 @@ const planInput = document.querySelector<HTMLInputElement>('#input-plan')!;
 const thicknessInput = document.querySelector<HTMLInputElement>('#input-thickness')!;
 const scaleReadout = document.querySelector<HTMLSpanElement>('#scale-readout')!;
 const resetViewBtn = document.querySelector<HTMLButtonElement>('#btn-reset-view')!;
+const savePlanBtn = document.querySelector<HTMLButtonElement>('#btn-save-plan')!;
+const openPlanBtn = document.querySelector<HTMLButtonElement>('#btn-open-plan')!;
+const saveStatus = document.querySelector<HTMLSpanElement>('#save-status')!;
 const statusButtons: Array<[HTMLButtonElement, WorkspaceStatus]> = [
   [document.querySelector<HTMLButtonElement>('#btn-status-free')!, 'free'],
   [document.querySelector<HTMLButtonElement>('#btn-status-occupied')!, 'occupied'],
@@ -87,6 +91,63 @@ statusButtons.forEach(([button, status]) => {
   button.addEventListener('click', () => {
     canvas.setSelectedWorkspaceStatus(status);
   });
+});
+
+// Единственный "текущий план" на устройство — id запоминается в
+// localStorage, чтобы "Открыть" работал и после F5 (S12: сохранить →
+// обновить страницу → открыть). Полноценный выбор/список планов —
+// отдельная, сознательно не начатая здесь предметная область (Этап 4
+// делает минимальный сквозной срез, не весь UI планов).
+const FLOOR_PLAN_ID_STORAGE_KEY = 'floorPlanId';
+
+function readStoredFloorPlanId(): number | null {
+  const raw = localStorage.getItem(FLOOR_PLAN_ID_STORAGE_KEY);
+  const id = raw === null ? NaN : Number(raw);
+  return Number.isFinite(id) ? id : null;
+}
+
+let currentFloorPlanId: number | null = readStoredFloorPlanId();
+let saveStatusTimeoutId: number | undefined;
+
+function showSaveStatus(text: string, isError: boolean): void {
+  window.clearTimeout(saveStatusTimeoutId);
+  saveStatus.textContent = text;
+  saveStatus.classList.toggle('save-status-error', isError);
+  saveStatusTimeoutId = window.setTimeout(() => {
+    saveStatus.textContent = '';
+  }, 4000);
+}
+
+savePlanBtn.addEventListener('click', () => {
+  void (async () => {
+    try {
+      const id = await saveFloorPlan(canvas.serialize(), currentFloorPlanId);
+      currentFloorPlanId = id;
+      localStorage.setItem(FLOOR_PLAN_ID_STORAGE_KEY, String(id));
+      showSaveStatus('Сохранено', false);
+    } catch {
+      // Бэкенд может быть недоступен (F5 без backend/, сеть и т.д.) —
+      // черчение при этом продолжает работать, падать здесь нельзя.
+      showSaveStatus('Не удалось сохранить: сервер недоступен', true);
+    }
+  })();
+});
+
+openPlanBtn.addEventListener('click', () => {
+  if (currentFloorPlanId === null) {
+    showSaveStatus('Ещё ничего не сохранено', true);
+    return;
+  }
+  const planId = currentFloorPlanId;
+  void (async () => {
+    try {
+      const scene = await loadFloorPlan(planId);
+      canvas.loadScene(scene);
+      showSaveStatus('Открыто', false);
+    } catch {
+      showSaveStatus('Не удалось открыть: сервер недоступен', true);
+    }
+  })();
 });
 
 function isTypingInField(): boolean {

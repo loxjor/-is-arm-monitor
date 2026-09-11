@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-router = APIRouter(prefix="/api/v1")
+from app.api.v1.floor_plans import router as floor_plans_router
 
-# Роуты для FloorPlan / Workspace подключаются сюда по мере реализации,
-# например: router.include_router(workspaces_router)
+router = APIRouter(prefix="/api/v1")
+router.include_router(floor_plans_router)

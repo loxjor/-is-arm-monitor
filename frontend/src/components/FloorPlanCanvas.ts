@@ -930,6 +930,16 @@ export class FloorPlanCanvas {
     this.restore(snapshot);
   }
 
+  /**
+   * Загружает сцену извне (открытие сохранённого плана, Т-03) — снимок
+   * текущего состояния кладётся в undo перед заменой, так что "Открыть"
+   * тоже можно откатить Ctrl+Z, как любое другое изменяющее действие.
+   */
+  loadScene(data: SceneData): void {
+    this.pushUndoSnapshot();
+    this.restore(data);
+  }
+
   private handleWallDrawStart(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
     // Слои со стенами/рабочими местами не слушают события в этом режиме
     // (см. setMode), поэтому event.target здесь всегда stage — отдельная
