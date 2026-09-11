@@ -7,11 +7,11 @@ from app.schemas.workspace import WorkspaceCreate, WorkspaceRead
 
 
 class FloorPlanBase(BaseModel):
-    name: str = Field(description="Название плана")
+    name: str = Field(max_length=255, description="Название плана")
     width_cm: float = Field(description="Ширина сцены плана, см")
     height_cm: float = Field(description="Высота сцены плана, см")
     background_image_url: str | None = Field(
-        default=None, description="URL фонового изображения плана"
+        default=None, max_length=2048, description="URL фонового изображения плана"
     )
 
 

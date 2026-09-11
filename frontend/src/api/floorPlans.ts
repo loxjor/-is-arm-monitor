@@ -102,6 +102,21 @@ function fromWorkspaceResponse(workspace: WorkspaceResponse): WorkspaceData {
   };
 }
 
+/**
+ * Ошибка API с HTTP-статусом — позволяет вызывающему коду различать причины
+ * отказа (например, 404 "план не найден" от недоступности сервера), а не
+ * судить по тексту сообщения.
+ */
+export class FloorPlanApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'FloorPlanApiError';
+  }
+}
+
 async function parseErrorMessage(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: string };
@@ -143,7 +158,7 @@ export async function saveFloorPlan(scene: SceneData, existingId: number | null)
   });
 
   if (!response.ok) {
-    throw new Error(await parseErrorMessage(response));
+    throw new FloorPlanApiError(await parseErrorMessage(response), response.status);
   }
 
   const data = (await response.json()) as FloorPlanResponse;
@@ -154,7 +169,7 @@ export async function saveFloorPlan(scene: SceneData, existingId: number | null)
 export async function loadFloorPlan(id: number): Promise<SceneData> {
   const response = await fetch(`${API_BASE_URL}/floor-plans/${id}`);
   if (!response.ok) {
-    throw new Error(await parseErrorMessage(response));
+    throw new FloorPlanApiError(await parseErrorMessage(response), response.status);
   }
 
   const data = (await response.json()) as FloorPlanResponse;

@@ -6,10 +6,10 @@ from app.models.workspace import WorkspaceStatus
 class WorkspaceBase(BaseModel):
     x: float = Field(description="X, см")
     y: float = Field(description="Y, см")
-    width: float = Field(description="Ширина, см")
-    height: float = Field(description="Высота, см")
-    rotation: float = Field(description="Угол поворота, градусы")
-    label: str = Field(description="Подпись рабочего места")
+    width: float = Field(gt=0, description="Ширина, см")
+    height: float = Field(gt=0, description="Высота, см")
+    rotation: float = Field(ge=-360, le=360, description="Угол поворота, градусы")
+    label: str = Field(max_length=255, description="Подпись рабочего места")
     status: WorkspaceStatus = Field(description="Статус: free / occupied / reserved")
 
 

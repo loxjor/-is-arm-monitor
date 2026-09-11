@@ -2,7 +2,7 @@ import './styles.css';
 import { FloorPlanCanvas } from './components/FloorPlanCanvas';
 import { cm } from './utils/scale';
 import type { WorkspaceStatus } from './types/workspace';
-import { loadFloorPlan, saveFloorPlan } from './api/floorPlans';
+import { FloorPlanApiError, loadFloorPlan, saveFloorPlan } from './api/floorPlans';
 
 // #app больше не на весь экран — тулбар занимает свою полосу в потоке (см.
 // styles.css), поэтому размер сцены берём из самого контейнера, а не из
@@ -125,10 +125,11 @@ savePlanBtn.addEventListener('click', () => {
       currentFloorPlanId = id;
       localStorage.setItem(FLOOR_PLAN_ID_STORAGE_KEY, String(id));
       showSaveStatus('Сохранено', false);
-    } catch {
+    } catch (error) {
       // Бэкенд может быть недоступен (F5 без backend/, сеть и т.д.) —
       // черчение при этом продолжает работать, падать здесь нельзя.
-      showSaveStatus('Не удалось сохранить: сервер недоступен', true);
+      const message = error instanceof Error ? error.message : 'неизвестная ошибка';
+      showSaveStatus(`Не удалось сохранить: ${message}`, true);
     }
   })();
 });
@@ -144,8 +145,16 @@ openPlanBtn.addEventListener('click', () => {
       const scene = await loadFloorPlan(planId);
       canvas.loadScene(scene);
       showSaveStatus('Открыто', false);
-    } catch {
-      showSaveStatus('Не удалось открыть: сервер недоступен', true);
+    } catch (error) {
+      // 404 значит "этого плана больше нет на сервере" — держаться за его id
+      // дальше бессмысленно, кнопка будет упираться в тот же несуществующий
+      // план до ручной очистки localStorage.
+      if (error instanceof FloorPlanApiError && error.status === 404) {
+        currentFloorPlanId = null;
+        localStorage.removeItem(FLOOR_PLAN_ID_STORAGE_KEY);
+      }
+      const message = error instanceof Error ? error.message : 'неизвестная ошибка';
+      showSaveStatus(`Не удалось открыть: ${message}`, true);
     }
   })();
 });
