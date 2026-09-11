@@ -3,6 +3,7 @@ import { Workspace } from './Workspace';
 import { Wall } from './Wall';
 import type { WorkspaceData } from '../types/workspace';
 import type { WallData } from '../types/wall';
+import type { SceneData } from '../types/scene';
 import { generateId } from '../utils/id';
 import { cmToPx, pxToCm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
@@ -39,6 +40,24 @@ const SNAP_INDICATOR_RADIUS_PX = 6;
 // это та самая стена, от грани/угла которой мы оттолкнулись.
 const WALL_COLLISION_IGNORE_RADIUS_PX = 2;
 
+// Диапазон зума колесом мыши (stage.scale()) и шаг увеличения за одно
+// деление колеса.
+const MIN_ZOOM = 0.1;
+const MAX_ZOOM = 8;
+const ZOOM_STEP = 1.05;
+
+// Статичное поле сетки: ±GRID_HALF_EXTENT_PX от начала координат сцены
+// (100 м в сумме на ось при PIXELS_PER_CM=2) — с запасом под "план шириной
+// не менее 60 м" из критерия приёмки. Не привязано к размеру окна и не
+// перерисовывается при pan/zoom: глобальная трансформация stage двигает и
+// масштабирует его вместе со всем остальным содержимым бесплатно.
+const GRID_HALF_EXTENT_PX = 10000;
+// Ниже этого масштаба мелкая сетка (шаг 40px в координатах сцены) превращается
+// в кашу на экране — прячем её, крупная сетка остаётся ориентиром.
+const GRID_MINOR_VISIBLE_ABOVE_SCALE = 0.4;
+
+const UNDO_STACK_DEPTH = 50;
+
 type JointEntry = { wall: Wall; end: 'start' | 'end' };
 type WallSnap =
   | { kind: 'corner'; point: WallEndpoint; wall: Wall }
@@ -59,6 +78,7 @@ type WallSnap =
 export class FloorPlanCanvas {
   private stage: Konva.Stage;
   private gridLayer: Konva.Layer;
+  private gridMinorRect: Konva.Rect | null = null;
   private backgroundLayer: Konva.Layer;
   private structureLayer: Konva.Layer;
   private mainLayer: Konva.Layer;
@@ -72,10 +92,26 @@ export class FloorPlanCanvas {
   private selectedId: string | null = null;
   private wallThicknessCm = DEFAULT_WALL_THICKNESS_CM;
 
+  private undoStack: SceneData[] = [];
+  // На время restore() addWall/addWorkspace не должны сами себе класть
+  // снимки в стек undo — иначе отмена действия сама стала бы отменяемым
+  // действием и стек бы никогда не пустел на "исходное" состояние.
+  private isRestoring = false;
+  private onScaleChange: ((scale: number) => void) | null = null;
+
   // Связанный метод как поле класса: один и тот же ссылочно-стабильный
   // обработчик для addEventListener на window (не пересоздаётся при каждом
   // рендере/вызове, и его можно снять removeEventListener этой же ссылкой).
   private readonly handleWindowPointerUp = (): void => this.handleWallDrawEnd();
+
+  // Панорамирование средней кнопкой мыши — независимо от Konva-drag'а
+  // объектов/stage, поэтому не может с ним конфликтовать: активируется
+  // только по event.button === 1, который рисование и Transformer не трогают.
+  private isPanning = false;
+  private panStart: { pointerX: number; pointerY: number; stageX: number; stageY: number } | null =
+    null;
+  private readonly handlePanMove = (event: MouseEvent): void => this.handleMiddleButtonPanMove(event);
+  private readonly handlePanEnd = (event: MouseEvent): void => this.handleMiddleButtonPanEnd(event);
 
   private wallDrawStart: { x: number; y: number } | null = null;
   private wallDrawStartSnap: WallSnap | null = null;
@@ -135,8 +171,9 @@ export class FloorPlanCanvas {
       }
     });
 
-    this.stage.on('mousedown touchstart', () => this.handleWallDrawStart());
+    this.stage.on('mousedown touchstart', (event) => this.handleWallDrawStart(event));
     this.stage.on('mousemove touchmove', (event) => this.handleWallDrawMove(event));
+    this.stage.on('wheel', (event) => this.handleWheelZoom(event));
 
     // На window, а не на stage: если увести курсор за пределы холста и
     // отпустить кнопку там, Konva-события на stage не долетают вовсе, и
@@ -145,39 +182,135 @@ export class FloorPlanCanvas {
     // конструкторе, — чтобы не было двух путей завершения одного действия.
     window.addEventListener('mouseup', this.handleWindowPointerUp);
     window.addEventListener('touchend', this.handleWindowPointerUp);
+
+    // Панорамирование средней кнопкой — сырые DOM-события в обход Konva,
+    // работает в любом режиме и не конфликтует с рисованием (там отдельная
+    // проверка кнопки) и с перетаскиванием объектов (у них своя draggable).
+    this.stage.container().addEventListener('mousedown', (event) => {
+      if (event.button !== 1) {
+        return;
+      }
+      event.preventDefault();
+      this.isPanning = true;
+      this.panStart = {
+        pointerX: event.clientX,
+        pointerY: event.clientY,
+        stageX: this.stage.x(),
+        stageY: this.stage.y(),
+      };
+      window.addEventListener('mousemove', this.handlePanMove);
+      window.addEventListener('mouseup', this.handlePanEnd);
+    });
+
+    const resizeObserver = new ResizeObserver(() => {
+      const container = this.stage.container();
+      this.stage.width(container.clientWidth);
+      this.stage.height(container.clientHeight);
+      this.stage.batchDraw();
+    });
+    resizeObserver.observe(this.stage.container());
   }
 
-  private drawGrid(): void {
-    const width = this.stage.width();
-    const height = this.stage.height();
+  private handleMiddleButtonPanMove(event: MouseEvent): void {
+    if (!this.isPanning || !this.panStart) {
+      return;
+    }
+    this.stage.position({
+      x: this.panStart.stageX + (event.clientX - this.panStart.pointerX),
+      y: this.panStart.stageY + (event.clientY - this.panStart.pointerY),
+    });
+    this.stage.batchDraw();
+  }
 
-    this.gridLayer.add(
-      new Konva.Rect({
-        x: 0,
-        y: 0,
-        width,
-        height,
-        fillPatternImage: getGridTilePattern(),
-        fillPatternRepeat: 'repeat',
-        listening: false,
-      }),
-    );
+  private handleMiddleButtonPanEnd(event: MouseEvent): void {
+    if (event.button !== 1) {
+      return;
+    }
+    this.isPanning = false;
+    this.panStart = null;
+    window.removeEventListener('mousemove', this.handlePanMove);
+    window.removeEventListener('mouseup', this.handlePanEnd);
+  }
+
+  /** Зум колесом мыши с сохранением точки сцены под курсором на месте. */
+  private handleWheelZoom(event: Konva.KonvaEventObject<WheelEvent>): void {
+    event.evt.preventDefault();
+
+    const oldScale = this.stage.scaleX();
+    const pointer = this.stage.getPointerPosition();
+    if (!pointer) {
+      return;
+    }
+
+    const pointTo = {
+      x: (pointer.x - this.stage.x()) / oldScale,
+      y: (pointer.y - this.stage.y()) / oldScale,
+    };
+
+    const direction = event.evt.deltaY > 0 ? -1 : 1;
+    const rawScale = direction > 0 ? oldScale * ZOOM_STEP : oldScale / ZOOM_STEP;
+    const newScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, rawScale));
+
+    this.stage.scale({ x: newScale, y: newScale });
+    this.stage.position({
+      x: pointer.x - pointTo.x * newScale,
+      y: pointer.y - pointTo.y * newScale,
+    });
+    this.stage.batchDraw();
+
+    this.gridMinorRect?.visible(newScale > GRID_MINOR_VISIBLE_ABOVE_SCALE);
+    this.gridLayer.batchDraw();
+    this.onScaleChange?.(newScale);
+  }
+
+  /** Текущий масштаб сцены (1 = 100%). */
+  getScale(): number {
+    return this.stage.scaleX();
+  }
+
+  /** Вызывается сразу при подписке (с текущим масштабом) и далее при каждом зуме колесом. */
+  setOnScaleChange(callback: (scale: number) => void): void {
+    this.onScaleChange = callback;
+    callback(this.stage.scaleX());
+  }
+
+  /**
+   * Рисуется один раз при создании сцены — статичное поле ±GRID_HALF_EXTENT_PX
+   * от начала координат, а не под текущий размер окна. Pan/zoom его не
+   * перерисовывают: это просто содержимое слоя, к которому применяется общая
+   * трансформация stage, как и ко всем остальным слоям.
+   */
+  private drawGrid(): void {
+    const origin = -GRID_HALF_EXTENT_PX;
+    const extent = GRID_HALF_EXTENT_PX;
+    const size = extent - origin;
+
+    this.gridMinorRect = new Konva.Rect({
+      x: origin,
+      y: origin,
+      width: size,
+      height: size,
+      fillPatternImage: getGridTilePattern(),
+      fillPatternRepeat: 'repeat',
+      listening: false,
+    });
+    this.gridLayer.add(this.gridMinorRect);
 
     const majorSpacing = GRID_MINOR_SPACING_PX * GRID_MAJOR_EVERY;
-    for (let x = 0; x <= width; x += majorSpacing) {
+    for (let x = origin; x <= extent; x += majorSpacing) {
       this.gridLayer.add(
         new Konva.Line({
-          points: [x, 0, x, height],
+          points: [x, origin, x, extent],
           stroke: '#c3c6cd',
           strokeWidth: 1,
           listening: false,
         }),
       );
     }
-    for (let y = 0; y <= height; y += majorSpacing) {
+    for (let y = origin; y <= extent; y += majorSpacing) {
       this.gridLayer.add(
         new Konva.Line({
-          points: [0, y, width, y],
+          points: [origin, y, extent, y],
           stroke: '#c3c6cd',
           strokeWidth: 1,
           listening: false,
@@ -188,11 +321,13 @@ export class FloorPlanCanvas {
     this.gridLayer.batchDraw();
   }
 
-  setWallThickness(thicknessCm: number): void {
+  /** Возвращает применённое (обрезанное в допустимый диапазон) значение. */
+  setWallThickness(thicknessCm: number): number {
     this.wallThicknessCm = Math.min(
       MAX_WALL_THICKNESS_CM,
       Math.max(MIN_WALL_THICKNESS_CM, thicknessCm),
     );
+    return this.wallThicknessCm;
   }
 
   getWallThickness(): number {
@@ -215,6 +350,11 @@ export class FloorPlanCanvas {
     // structureLayer) от listening(false) не зависит — это два разных канваса.
     this.structureLayer.listening(mode === 'select');
     this.mainLayer.listening(mode === 'select');
+
+    // Панорамирование левой кнопкой по пустому месту — только в select:
+    // Konva сама не отдаст жест stage, если mousedown пришёлся на объект
+    // с собственной draggable=true (тот перетащится сам, а не сцена).
+    this.stage.draggable(mode === 'select');
 
     this.stage.container().style.cursor = mode === 'draw-wall' ? 'crosshair' : 'default';
 
@@ -247,8 +387,11 @@ export class FloorPlanCanvas {
   }
 
   addWorkspace(data: WorkspaceData): Workspace {
+    this.pushUndoSnapshot();
+
     const workspace = new Workspace(data, (selected) => this.select(selected.group, selected.id));
     workspace.setDraggable(this.mode === 'select');
+    workspace.group.on('dragstart transformstart', () => this.pushUndoSnapshot());
     this.mainLayer.add(workspace.group);
     this.workspaces.set(data.id, workspace);
     this.transformer.moveToTop();
@@ -257,8 +400,11 @@ export class FloorPlanCanvas {
   }
 
   addWall(data: WallData): Wall {
+    this.pushUndoSnapshot();
+
     const wall = new Wall(data, (selected) => this.select(selected.rect, selected.id));
     wall.setDraggable(this.mode === 'select');
+    wall.rect.on('dragstart transformstart', () => this.pushUndoSnapshot());
     this.structureLayer.add(wall.rect);
     this.walls.set(data.id, wall);
     this.registerWallJoints(data, wall);
@@ -297,11 +443,80 @@ export class FloorPlanCanvas {
     entries.forEach((entry) => {
       const extendCm = entry.wall.thicknessCm / 2;
       if (entry.end === 'start') {
-        entry.wall.extendStartOnce(extendCm);
+        entry.wall.setStartExtension(extendCm);
       } else {
-        entry.wall.extendEndOnce(extendCm);
+        entry.wall.setEndExtension(extendCm);
       }
     });
+  }
+
+  /**
+   * Обратная операция к registerJointEnd: убирает стену из реестра стыков
+   * в точке (start/end до удаления) и пересчитывает удлинение оставшихся
+   * там стен — 0, если стык распался (осталась одна или ноль стен), снова
+   * полтолщины, если стык всё ещё держат 2+. Нужна для Т-05: без неё торец
+   * соседней стены так и остался бы вытянут в пустоту после удаления.
+   */
+  private unregisterWallJoints(wall: Wall): void {
+    const data = wall.toData();
+    const rad = (data.rotation * Math.PI) / 180;
+    const endPoint: WallEndpoint = {
+      x: data.x + Math.cos(rad) * data.length,
+      y: data.y + Math.sin(rad) * data.length,
+    };
+
+    this.unregisterJointEnd({ x: data.x, y: data.y }, wall);
+    this.unregisterJointEnd(endPoint, wall);
+  }
+
+  private unregisterJointEnd(pointCm: WallEndpoint, wall: Wall): void {
+    const key = `${Math.round(pointCm.x)}:${Math.round(pointCm.y)}`;
+    const entries = this.jointPoints.get(key);
+    if (!entries) {
+      return;
+    }
+
+    const remaining = entries.filter((entry) => entry.wall !== wall);
+    if (remaining.length === 0) {
+      this.jointPoints.delete(key);
+      return;
+    }
+    this.jointPoints.set(key, remaining);
+
+    remaining.forEach((entry) => {
+      const extendCm = remaining.length >= 2 ? entry.wall.thicknessCm / 2 : 0;
+      if (entry.end === 'start') {
+        entry.wall.setStartExtension(extendCm);
+      } else {
+        entry.wall.setEndExtension(extendCm);
+      }
+    });
+  }
+
+  /**
+   * Радиусы/длины привязки и служебной графики заданы константами в
+   * ЭКРАННЫХ пикселях (сколько это должно занимать на экране визуально),
+   * но сравниваются с расстояниями в координатах СЦЕНЫ (где лежат стены).
+   * При масштабе stage, отличном от 1, эти две системы расходятся: радиус
+   * 24 при масштабе 0.2 — это всего 4.8 экранных пикселя (магнетизм кажется
+   * сломанным), а при масштабе 4 — уже 96 (цепляет всё подряд). Деление на
+   * stage.scaleX() возвращает константе её исходный, постоянный на экране
+   * смысл независимо от текущего зума.
+   */
+  private get snapRadiusPx(): number {
+    return WALL_JOINT_SNAP_RADIUS_PX / this.stage.scaleX();
+  }
+
+  private get collisionIgnoreRadiusPx(): number {
+    return WALL_COLLISION_IGNORE_RADIUS_PX / this.stage.scaleX();
+  }
+
+  private get snapIndicatorRadiusPx(): number {
+    return SNAP_INDICATOR_RADIUS_PX / this.stage.scaleX();
+  }
+
+  private get dimensionLabelGapPx(): number {
+    return DIMENSION_LABEL_GAP_PX / this.stage.scaleX();
   }
 
   /**
@@ -323,7 +538,8 @@ export class FloorPlanCanvas {
     let bestKind: 'corner' | 'face' | null = null;
     let bestPoint: WallEndpoint | null = null;
     let bestWall: Wall | null = null;
-    let bestDist = WALL_JOINT_SNAP_RADIUS_PX;
+    const snapRadiusPx = this.snapRadiusPx;
+    let bestDist = snapRadiusPx;
 
     for (const wall of this.walls.values()) {
       const data = wall.toData();
@@ -361,7 +577,7 @@ export class FloorPlanCanvas {
       }
 
       const t = (pos.x - startPx.x) * dirX + (pos.y - startPx.y) * dirY;
-      if (t >= WALL_JOINT_SNAP_RADIUS_PX && t <= lengthPx - WALL_JOINT_SNAP_RADIUS_PX) {
+      if (t >= snapRadiusPx && t <= lengthPx - snapRadiusPx) {
         const distPerp = (pos.x - startPx.x) * perpX + (pos.y - startPx.y) * perpY;
         const faceSign = distPerp >= 0 ? 1 : -1;
         const facePoint = {
@@ -439,7 +655,7 @@ export class FloorPlanCanvas {
 
       const ignoreT = ignoreWalls.has(wall)
         ? halfPx + 1
-        : WALL_COLLISION_IGNORE_RADIUS_PX;
+        : this.collisionIgnoreRadiusPx;
 
       for (const [a, b] of edges) {
         const hit = intersectRaySegment(start, dirX, dirY, a, b);
@@ -547,14 +763,102 @@ export class FloorPlanCanvas {
     this.transformer.getLayer()?.batchDraw();
   }
 
-  private handleWallDrawStart(): void {
+  /** Удаляет выделенный объект (стену или рабочее место). Ничего не делает, если ничего не выделено. */
+  removeSelected(): void {
+    if (!this.selectedId) {
+      return;
+    }
+    this.pushUndoSnapshot();
+
+    const wall = this.walls.get(this.selectedId);
+    if (wall) {
+      this.unregisterWallJoints(wall);
+      wall.rect.destroy();
+      this.walls.delete(this.selectedId);
+      this.structureLayer.batchDraw();
+    } else {
+      const workspace = this.workspaces.get(this.selectedId);
+      workspace?.group.destroy();
+      this.workspaces.delete(this.selectedId);
+      this.mainLayer.batchDraw();
+    }
+
+    this.deselect();
+  }
+
+  /** Снимок всей сцены — формат undo и будущего сохранения (Т-03/Т-05). */
+  serialize(): SceneData {
+    return {
+      version: 1,
+      walls: Array.from(this.walls.values()).map((wall) => wall.toData()),
+      workspaces: Array.from(this.workspaces.values()).map((workspace) => workspace.toData()),
+    };
+  }
+
+  /**
+   * Пересоздаёт сцену из снимка: сначала снимает выделение (иначе
+   * Transformer останется со ссылками на уже уничтоженные узлы и упадёт
+   * при первом обращении), затем уничтожает текущие узлы, чистит карты и
+   * реестр стыков, и только потом создаёт всё заново через addWall/
+   * addWorkspace — они же заново регистрируют стыки.
+   */
+  private restore(data: SceneData): void {
+    this.isRestoring = true;
+
+    this.deselect();
+    this.walls.forEach((wall) => wall.rect.destroy());
+    this.walls.clear();
+    this.workspaces.forEach((workspace) => workspace.group.destroy());
+    this.workspaces.clear();
+    this.jointPoints.clear();
+
+    data.walls.forEach((wallData) => this.addWall(wallData));
+    data.workspaces.forEach((workspaceData) => this.addWorkspace(workspaceData));
+
+    this.isRestoring = false;
+    this.structureLayer.batchDraw();
+    this.mainLayer.batchDraw();
+  }
+
+  /** Кладёт снимок текущего состояния в стек undo перед изменяющим действием. */
+  private pushUndoSnapshot(): void {
+    if (this.isRestoring) {
+      return;
+    }
+    this.undoStack.push(this.serialize());
+    if (this.undoStack.length > UNDO_STACK_DEPTH) {
+      this.undoStack.shift();
+    }
+  }
+
+  /** Откатывает последнее изменяющее действие (создание/удаление/drag/transform). */
+  undo(): void {
+    const snapshot = this.undoStack.pop();
+    if (!snapshot) {
+      return;
+    }
+    this.restore(snapshot);
+  }
+
+  private handleWallDrawStart(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
     // Слои со стенами/рабочими местами не слушают события в этом режиме
     // (см. setMode), поэтому event.target здесь всегда stage — отдельная
-    // проверка не нужна.
+    // проверка не нужна. А вот кнопку мыши Konva не фильтрует сама —
+    // mousedown прилетает и от средней/правой; средняя занята панорамой,
+    // так что рисование должно реагировать только на левую (touch — не
+    // MouseEvent, его не трогаем).
     if (this.mode !== 'draw-wall') {
       return;
     }
-    const pointerPos = this.stage.getPointerPosition();
+    if (event.evt instanceof MouseEvent && event.evt.button !== 0) {
+      return;
+    }
+    // getPointerPosition() отдаёт координаты в пикселях контейнера — верно
+    // только пока у stage единичный масштаб и нулевое смещение. С зумом/
+    // панорамированием нужна getRelativePointerPosition() — она уже учитывает
+    // текущую трансформацию stage и возвращает координаты в системе сцены,
+    // в которой лежат сами стены.
+    const pointerPos = this.stage.getRelativePointerPosition();
     if (!pointerPos) {
       return;
     }
@@ -564,20 +868,22 @@ export class FloorPlanCanvas {
     this.updateWallGhost(null);
 
     const thicknessPx = cmToPx(this.wallThicknessCm);
+    const scale = this.stage.scaleX();
 
     this.wallDrawStart = pos;
 
     this.guideHighlight = new Konva.Circle({
       x: pos.x,
       y: pos.y,
-      radius: GUIDE_HIGHLIGHT_RADIUS_PX,
+      radius: GUIDE_HIGHLIGHT_RADIUS_PX / scale,
       fill: 'rgba(76, 175, 80, 0.15)',
       listening: false,
     });
     this.guideLines = GUIDE_LINE_ANGLES_DEG.map((angleDeg) => {
       const rad = (angleDeg * Math.PI) / 180;
-      const dx = Math.cos(rad) * GUIDE_LINE_LENGTH_PX;
-      const dy = Math.sin(rad) * GUIDE_LINE_LENGTH_PX;
+      const guideLength = GUIDE_LINE_LENGTH_PX / scale;
+      const dx = Math.cos(rad) * guideLength;
+      const dy = Math.sin(rad) * guideLength;
       return new Konva.Line({
         points: [pos.x - dx, pos.y - dy, pos.x + dx, pos.y + dy],
         stroke: '#57c15c',
@@ -619,7 +925,9 @@ export class FloorPlanCanvas {
   }
 
   private handleWallDrawMove(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
-    const pos = this.stage.getPointerPosition();
+    // См. комментарий в handleWallDrawStart — с зумом/панорамированием
+    // getPointerPosition() больше не координата сцены.
+    const pos = this.stage.getRelativePointerPosition();
     if (!pos) {
       return;
     }
@@ -722,10 +1030,10 @@ export class FloorPlanCanvas {
       // непрозрачной заливке, без щели. Саму сквозную стену не трогаем —
       // она и так непрерывна.
       if (startSnap?.kind === 'face') {
-        wall.extendStartOnce(wall.thicknessCm / 2);
+        wall.setStartExtension(wall.thicknessCm / 2);
       }
       if (endSnap?.kind === 'face') {
-        wall.extendEndOnce(wall.thicknessCm / 2);
+        wall.setEndExtension(wall.thicknessCm / 2);
       }
     } else {
       this.structureLayer.batchDraw();
@@ -789,7 +1097,6 @@ export class FloorPlanCanvas {
 
     if (!this.wallSnapIndicator) {
       this.wallSnapIndicator = new Konva.Circle({
-        radius: SNAP_INDICATOR_RADIUS_PX,
         stroke: '#1976d2',
         strokeWidth: 2,
         fill: '#ffffff',
@@ -798,6 +1105,9 @@ export class FloorPlanCanvas {
       this.structureLayer.add(this.wallSnapIndicator);
     }
 
+    // Радиус выставляем на каждый вызов, а не только при создании — зум
+    // мог измениться, пока курсор просто висит над точкой примагничивания.
+    this.wallSnapIndicator.radius(this.snapIndicatorRadiusPx);
     this.wallSnapIndicator.position(snap.point);
     this.wallSnapIndicator.moveToTop();
   }
@@ -845,7 +1155,9 @@ export class FloorPlanCanvas {
    * Подпись длины — по центру линии стены, вдоль её направления (с
    * коррекцией "вверх ногами" для углов больше 90°). Подпись толщины — у
    * конца стены, всегда горизонтальная. Обе смещены перпендикулярно линии,
-   * чтобы не перекрывать саму штриховку.
+   * чтобы не перекрывать саму штриховку, и масштабированы обратно текущему
+   * зуму (1 / stage.scaleX()) — иначе на масштабе 0.2 их не прочитать, а на
+   * масштабе 4 они займут пол-экрана.
    */
   private updateWallDimensionLabels(
     start: { x: number; y: number },
@@ -857,12 +1169,16 @@ export class FloorPlanCanvas {
       return;
     }
 
+    const scale = this.stage.scaleX();
+    const inverseScale = 1 / scale;
+    const gapPx = this.dimensionLabelGapPx;
+
     const angleRad = (angleDeg * Math.PI) / 180;
     const dirX = Math.cos(angleRad);
     const dirY = Math.sin(angleRad);
     const perpX = -Math.sin(angleRad);
     const perpY = Math.cos(angleRad);
-    const labelOffset = thicknessPx / 2 + DIMENSION_LABEL_GAP_PX;
+    const labelOffset = thicknessPx / 2 + gapPx;
 
     let textRotation = angleDeg;
     if (textRotation > 90 || textRotation < -90) {
@@ -877,14 +1193,18 @@ export class FloorPlanCanvas {
       x: midX,
       y: midY,
       rotation: textRotation,
+      scaleX: inverseScale,
+      scaleY: inverseScale,
     });
 
     const endX = start.x + dirX * lengthPx - perpX * labelOffset;
     const endY = start.y + dirY * lengthPx - perpY * labelOffset;
 
     this.wallThicknessLabel.setAttrs({
-      x: endX + dirX * DIMENSION_LABEL_GAP_PX,
-      y: endY + dirY * DIMENSION_LABEL_GAP_PX,
+      x: endX + dirX * gapPx,
+      y: endY + dirY * gapPx,
+      scaleX: inverseScale,
+      scaleY: inverseScale,
     });
   }
 }

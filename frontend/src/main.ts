@@ -18,6 +18,7 @@ const selectBtn = document.querySelector<HTMLButtonElement>('#btn-select')!;
 const drawWallBtn = document.querySelector<HTMLButtonElement>('#btn-draw-wall')!;
 const planInput = document.querySelector<HTMLInputElement>('#input-plan')!;
 const thicknessInput = document.querySelector<HTMLInputElement>('#input-thickness')!;
+const scaleReadout = document.querySelector<HTMLSpanElement>('#scale-readout')!;
 
 function setActiveButton(active: HTMLButtonElement): void {
   [selectBtn, drawWallBtn].forEach((btn) => btn.classList.toggle('active', btn === active));
@@ -33,11 +34,21 @@ drawWallBtn.addEventListener('click', () => {
   setActiveButton(drawWallBtn);
 });
 
-thicknessInput.addEventListener('change', () => {
+// На input применяем значение сразу (по мере ввода), но НЕ переписываем
+// поле — иначе при наборе "10" уже после первого "1" (обрезка в допустимый
+// диапазон не меняет однозначные числа, но в общем случае могла бы) поле
+// переписалось бы под курсором, и двузначные значения стало бы невозможно
+// набрать. Нормализация видимого текста — только на change/blur, когда
+// пользователь закончил ввод: 500 → 60 ровно так, как ожидает S11.
+thicknessInput.addEventListener('input', () => {
   const value = Number(thicknessInput.value);
   if (Number.isFinite(value)) {
     canvas.setWallThickness(value);
   }
+});
+
+thicknessInput.addEventListener('change', () => {
+  thicknessInput.value = String(canvas.getWallThickness());
 });
 
 planInput.addEventListener('change', () => {
@@ -47,4 +58,30 @@ planInput.addEventListener('change', () => {
   }
   const url = URL.createObjectURL(file);
   canvas.loadBackgroundPlan(url);
+});
+
+canvas.setOnScaleChange((scale) => {
+  scaleReadout.textContent = `Масштаб: ${Math.round(scale * 100)}%`;
+});
+
+function isTypingInField(): boolean {
+  const active = document.activeElement;
+  return active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
+}
+
+window.addEventListener('keydown', (event) => {
+  if (isTypingInField()) {
+    return;
+  }
+
+  if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault();
+    canvas.removeSelected();
+    return;
+  }
+
+  if (event.ctrlKey && event.key.toLowerCase() === 'z') {
+    event.preventDefault();
+    canvas.undo();
+  }
 });

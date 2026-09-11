@@ -15,12 +15,15 @@ const WALL_MIN_THICKNESS_CM = 2;
  * стены, а не её край.
  *
  * Когда в точке начала/конца стены оказывается другая стена (стык), вызов
- * extendStartOnce/extendEndOnce удлиняет отрисованный прямоугольник на
+ * setStartExtension/setEndExtension удлиняет отрисованный прямоугольник на
  * половину толщины за пределы этой точки — приём "квадратного торца"
  * (как stroke-linecap: square), который закрывает щель/нахлёст на стыке
  * без построения точного полигона объединения. startExtensionCm/
- * endExtensionCm запоминают добавку, чтобы toData() могла вернуть исходную,
- * реально нарисованную пользователем длину, а не удлинённую для рендера.
+ * endExtensionCm запоминают текущую добавку (а не факт "уже применялась
+ * ли она"), поэтому удлинение можно и снять, и пересчитать заново — это
+ * нужно при удалении соседней стены (Т-05) и при пересчёте стыков (Т-09).
+ * toData() всегда возвращает исходную, реально нарисованную пользователем
+ * длину, а не удлинённую для рендера.
  */
 export class Wall {
   readonly id: string;
@@ -80,27 +83,36 @@ export class Wall {
     this.rect.draggable(draggable);
   }
 
-  /** Удлиняет прямоугольник назад за точку начала (один раз за жизнь стены). */
-  extendStartOnce(extraCm: number): void {
-    if (this.startExtensionCm > 0 || extraCm <= 0) {
+  /**
+   * Выставляет удлинение назад за точку начала на конкретное значение
+   * (не "добавляет", а именно задаёт целевую величину) — к прямоугольнику
+   * применяется только разница со старым значением, так что вызов
+   * идемпотентен и обратим (setStartExtension(0) убирает удлинение).
+   */
+  setStartExtension(extraCm: number): void {
+    const clampedCm = Math.max(0, extraCm);
+    const deltaCm = clampedCm - this.startExtensionCm;
+    if (deltaCm === 0) {
       return;
     }
-    this.startExtensionCm = extraCm;
+    this.startExtensionCm = clampedCm;
 
-    const extraPx = cmToPx(extraCm);
+    const deltaPx = cmToPx(deltaCm);
     const rad = (this.rect.rotation() * Math.PI) / 180;
-    this.rect.x(this.rect.x() - Math.cos(rad) * extraPx);
-    this.rect.y(this.rect.y() - Math.sin(rad) * extraPx);
-    this.rect.width(this.rect.width() + extraPx);
+    this.rect.x(this.rect.x() - Math.cos(rad) * deltaPx);
+    this.rect.y(this.rect.y() - Math.sin(rad) * deltaPx);
+    this.rect.width(this.rect.width() + deltaPx);
   }
 
-  /** Удлиняет прямоугольник вперёд за точку конца (один раз за жизнь стены). */
-  extendEndOnce(extraCm: number): void {
-    if (this.endExtensionCm > 0 || extraCm <= 0) {
+  /** То же самое, но вперёд за точку конца. */
+  setEndExtension(extraCm: number): void {
+    const clampedCm = Math.max(0, extraCm);
+    const deltaCm = clampedCm - this.endExtensionCm;
+    if (deltaCm === 0) {
       return;
     }
-    this.endExtensionCm = extraCm;
-    this.rect.width(this.rect.width() + cmToPx(extraCm));
+    this.endExtensionCm = clampedCm;
+    this.rect.width(this.rect.width() + cmToPx(deltaCm));
   }
 
   toData(): WallData {

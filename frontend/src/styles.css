@@ -70,3 +70,12 @@ body {
   border-radius: 4px;
   font-size: 13px;
 }
+
+#toolbar .scale-readout {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  font-size: 12px;
+  color: #555a63;
+  white-space: nowrap;
+}
