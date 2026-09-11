@@ -5,10 +5,29 @@
  */
 export const PIXELS_PER_CM = 2;
 
+/**
+ * Брендированный тип — отличает сантиметры от "просто числа" на уровне
+ * компилятора. pxToCm — единственное место, где чеканится доверенное
+ * значение из пикселей; cm() — для случаев, когда значение в сантиметрах
+ * известно заранее (литералы демо-данных, пользовательский ввод из полей
+ * тулбара). Без этого WorkspaceData однажды уже возвращала сырые пиксели
+ * Konva в полях, объявленных как сантиметры, — типы совпадали, компилятор
+ * не помогал.
+ */
+export type Cm = number & { readonly __unit: 'cm' };
+
+export function cm(value: number): Cm {
+  return value as Cm;
+}
+
+// Принимает обычный number, а не Cm: это внутренняя граница рендеринга, и
+// бренд пришлось бы иначе протаскивать через всю пиксельную геометрию
+// FloorPlanCanvas (которая сознательно работает в px, не в см). Cm — числа,
+// поэтому вызов cmToPx(cmValue) всё равно типобезопасен без явных касаний.
 export function cmToPx(cm: number): number {
   return cm * PIXELS_PER_CM;
 }
 
-export function pxToCm(px: number): number {
-  return px / PIXELS_PER_CM;
+export function pxToCm(px: number): Cm {
+  return (px / PIXELS_PER_CM) as Cm;
 }

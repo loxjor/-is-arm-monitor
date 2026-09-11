@@ -1,6 +1,6 @@
 import Konva from 'konva';
 import type { WallData } from '../types/wall';
-import { cmToPx, pxToCm } from '../utils/scale';
+import { cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 
 const WALL_STROKE = '#2b2b2b';
@@ -28,14 +28,12 @@ const WALL_MIN_THICKNESS_CM = 2;
 export class Wall {
   readonly id: string;
   readonly rect: Konva.Rect;
-  readonly thicknessCm: number;
 
   private startExtensionCm = 0;
   private endExtensionCm = 0;
 
   constructor(data: WallData, onSelect: (wall: Wall) => void) {
     this.id = data.id;
-    this.thicknessCm = data.thickness;
     const thicknessPx = cmToPx(data.thickness);
 
     this.rect = new Konva.Rect({
@@ -77,6 +75,16 @@ export class Wall {
       this.rect.scaleX(1);
       this.rect.scaleY(1);
     });
+  }
+
+  /**
+   * Вычисляется из текущей высоты прямоугольника, а не хранится отдельным
+   * полем: transformend Transformer'ом меняет реальную высоту, и раньше
+   * (readonly-поле, зафиксированное в конструкторе) rebuildJoints после
+   * такого ресайза считал удлинение стыка по УЖЕ устаревшей толщине.
+   */
+  get thicknessCm(): Cm {
+    return pxToCm(this.rect.height());
   }
 
   setDraggable(draggable: boolean): void {

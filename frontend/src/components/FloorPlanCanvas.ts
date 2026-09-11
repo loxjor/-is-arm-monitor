@@ -1,11 +1,11 @@
 import Konva from 'konva';
 import { Workspace } from './Workspace';
 import { Wall } from './Wall';
-import type { WorkspaceData } from '../types/workspace';
+import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
 import type { WallData } from '../types/wall';
 import type { SceneData } from '../types/scene';
 import { generateId } from '../utils/id';
-import { cmToPx, pxToCm } from '../utils/scale';
+import { cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 import { GRID_MAJOR_EVERY, GRID_MINOR_SPACING_PX, getGridTilePattern } from '../utils/grid';
 import {
@@ -95,7 +95,7 @@ export class FloorPlanCanvas {
 
   private mode: CanvasMode = 'select';
   private selectedId: string | null = null;
-  private wallThicknessCm = DEFAULT_WALL_THICKNESS_CM;
+  private wallThicknessCm: Cm = cm(DEFAULT_WALL_THICKNESS_CM);
 
   private undoStack: SceneData[] = [];
   // На время restore() addWall/addWorkspace не должны сами себе класть
@@ -404,15 +404,14 @@ export class FloorPlanCanvas {
   }
 
   /** Возвращает применённое (обрезанное в допустимый диапазон) значение. */
-  setWallThickness(thicknessCm: number): number {
-    this.wallThicknessCm = Math.min(
-      MAX_WALL_THICKNESS_CM,
-      Math.max(MIN_WALL_THICKNESS_CM, thicknessCm),
+  setWallThickness(thicknessCm: number): Cm {
+    this.wallThicknessCm = cm(
+      Math.min(MAX_WALL_THICKNESS_CM, Math.max(MIN_WALL_THICKNESS_CM, thicknessCm)),
     );
     return this.wallThicknessCm;
   }
 
-  getWallThickness(): number {
+  getWallThickness(): Cm {
     return this.wallThicknessCm;
   }
 
@@ -858,6 +857,23 @@ export class FloorPlanCanvas {
     }
 
     this.deselect();
+  }
+
+  /**
+   * Меняет статус выделенного рабочего места. Ничего не делает, если
+   * выделения нет или выделена стена (у стен статуса не бывает).
+   */
+  setSelectedWorkspaceStatus(status: WorkspaceStatus): void {
+    if (!this.selectedId) {
+      return;
+    }
+    const workspace = this.workspaces.get(this.selectedId);
+    if (!workspace) {
+      return;
+    }
+    this.pushUndoSnapshot();
+    workspace.setStatus(status);
+    this.mainLayer.batchDraw();
   }
 
   /** Снимок всей сцены — формат undo и будущего сохранения (Т-03/Т-05). */

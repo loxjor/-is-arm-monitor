@@ -1,5 +1,7 @@
 import './styles.css';
 import { FloorPlanCanvas } from './components/FloorPlanCanvas';
+import { cm } from './utils/scale';
+import type { WorkspaceStatus } from './types/workspace';
 
 // #app больше не на весь экран — тулбар занимает свою полосу в потоке (см.
 // styles.css), поэтому размер сцены берём из самого контейнера, а не из
@@ -8,12 +10,14 @@ import { FloorPlanCanvas } from './components/FloorPlanCanvas';
 const appContainer = document.getElementById('app')!;
 const canvas = new FloorPlanCanvas('app', appContainer.clientWidth, appContainer.clientHeight);
 
+// 150×130 см координаты дают ту же экранную позицию, что и раньше (300,260 px
+// при PIXELS_PER_CM=2); 120×80 см — правдоподобный размер офисного стола.
 canvas.addWorkspace({
   id: 'ws-1',
-  x: 300,
-  y: 260,
-  width: 120,
-  height: 80,
+  x: cm(150),
+  y: cm(130),
+  width: cm(120),
+  height: cm(80),
   rotation: 0,
   label: 'Стол №1',
   status: 'free',
@@ -25,6 +29,11 @@ const planInput = document.querySelector<HTMLInputElement>('#input-plan')!;
 const thicknessInput = document.querySelector<HTMLInputElement>('#input-thickness')!;
 const scaleReadout = document.querySelector<HTMLSpanElement>('#scale-readout')!;
 const resetViewBtn = document.querySelector<HTMLButtonElement>('#btn-reset-view')!;
+const statusButtons: Array<[HTMLButtonElement, WorkspaceStatus]> = [
+  [document.querySelector<HTMLButtonElement>('#btn-status-free')!, 'free'],
+  [document.querySelector<HTMLButtonElement>('#btn-status-occupied')!, 'occupied'],
+  [document.querySelector<HTMLButtonElement>('#btn-status-reserved')!, 'reserved'],
+];
 
 function setActiveButton(active: HTMLButtonElement): void {
   [selectBtn, drawWallBtn].forEach((btn) => btn.classList.toggle('active', btn === active));
@@ -72,6 +81,12 @@ canvas.setOnScaleChange((scale) => {
 
 resetViewBtn.addEventListener('click', () => {
   canvas.resetView();
+});
+
+statusButtons.forEach(([button, status]) => {
+  button.addEventListener('click', () => {
+    canvas.setSelectedWorkspaceStatus(status);
+  });
 });
 
 function isTypingInField(): boolean {
