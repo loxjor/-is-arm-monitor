@@ -117,16 +117,60 @@ export class FloorPlanApiError extends Error {
   }
 }
 
-async function parseErrorMessage(response: Response): Promise<string> {
-  try {
-    const body = (await response.json()) as { detail?: string };
-    if (body.detail) {
-      return body.detail;
-    }
-  } catch {
-    // тело не JSON или пустое — используем только статус
+/**
+ * У FastAPI detail — не всегда строка: при 422 это массив объектов
+ * ({type, loc, msg, ...}) с описанием ошибки на каждое поле. Дописываем
+ * место и причину из первого элемента в скобках, только когда форма detail
+ * действительно похожа на список ошибок валидации — во всех остальных
+ * случаях (не JSON, detail — строка, массив пуст) молча ничего не добавляем,
+ * а не показываем пользователю "[object Object]" или мусор.
+ */
+function formatValidationHint(detail: unknown): string {
+  if (!Array.isArray(detail) || detail.length === 0) {
+    return '';
   }
-  return `HTTP ${response.status}`;
+  const first = detail[0] as { msg?: unknown; loc?: unknown };
+  if (typeof first?.msg !== 'string') {
+    return '';
+  }
+  const loc = Array.isArray(first.loc) ? first.loc.join('.') : null;
+  return loc ? ` (${loc}: ${first.msg})` : ` (${first.msg})`;
+}
+
+/**
+ * Сообщение формирует клиент по коду ответа, а не пробрасывает наружу
+ * текст сервера как есть — 404/422/остальное имеют разный смысл для
+ * пользователя, а detail при 422 вообще не строка (см. formatValidationHint).
+ */
+async function buildHttpErrorMessage(response: Response): Promise<string> {
+  if (response.status === 404) {
+    return 'план не найден на сервере';
+  }
+  if (response.status === 422) {
+    let detail: unknown;
+    try {
+      detail = ((await response.json()) as { detail?: unknown }).detail;
+    } catch {
+      // тело не JSON или пустое — сообщение обойдётся без уточнения
+    }
+    return `сервер отклонил данные плана${formatValidationHint(detail)}`;
+  }
+  return `ошибка сервера (HTTP ${response.status})`;
+}
+
+/**
+ * fetch() сам бросает TypeError ("Failed to fetch"), когда сервер
+ * недоступен — до того, как появляется какой-либо HTTP-статус. Это текст
+ * браузера, не сервера, и показывать его пользователю как есть не нужно:
+ * заворачиваем в тот же FloorPlanApiError с тем же понятным сообщением,
+ * что было раньше жёстко зашито в main.ts.
+ */
+async function fetchFloorPlan(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new FloorPlanApiError('сервер недоступен', 0);
+  }
 }
 
 /**
@@ -151,14 +195,14 @@ export async function saveFloorPlan(scene: SceneData, existingId: number | null)
       ? `${API_BASE_URL}/floor-plans`
       : `${API_BASE_URL}/floor-plans/${existingId}`;
 
-  const response = await fetch(url, {
+  const response = await fetchFloorPlan(url, {
     method: existingId === null ? 'POST' : 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
-    throw new FloorPlanApiError(await parseErrorMessage(response), response.status);
+    throw new FloorPlanApiError(await buildHttpErrorMessage(response), response.status);
   }
 
   const data = (await response.json()) as FloorPlanResponse;
@@ -167,9 +211,9 @@ export async function saveFloorPlan(scene: SceneData, existingId: number | null)
 
 /** Загружает план и переводит его в формат SceneData (см. FloorPlanCanvas.loadScene). */
 export async function loadFloorPlan(id: number): Promise<SceneData> {
-  const response = await fetch(`${API_BASE_URL}/floor-plans/${id}`);
+  const response = await fetchFloorPlan(`${API_BASE_URL}/floor-plans/${id}`);
   if (!response.ok) {
-    throw new FloorPlanApiError(await parseErrorMessage(response), response.status);
+    throw new FloorPlanApiError(await buildHttpErrorMessage(response), response.status);
   }
 
   const data = (await response.json()) as FloorPlanResponse;
