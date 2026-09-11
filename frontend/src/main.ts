@@ -1,7 +1,12 @@
 import './styles.css';
 import { FloorPlanCanvas } from './components/FloorPlanCanvas';
 
-const canvas = new FloorPlanCanvas('app', window.innerWidth, window.innerHeight);
+// #app больше не на весь экран — тулбар занимает свою полосу в потоке (см.
+// styles.css), поэтому размер сцены берём из самого контейнера, а не из
+// window.innerWidth/innerHeight (иначе сцена стартует шире/выше реального
+// места и обрезается только на первый ResizeObserver-тик).
+const appContainer = document.getElementById('app')!;
+const canvas = new FloorPlanCanvas('app', appContainer.clientWidth, appContainer.clientHeight);
 
 canvas.addWorkspace({
   id: 'ws-1',
@@ -19,6 +24,7 @@ const drawWallBtn = document.querySelector<HTMLButtonElement>('#btn-draw-wall')!
 const planInput = document.querySelector<HTMLInputElement>('#input-plan')!;
 const thicknessInput = document.querySelector<HTMLInputElement>('#input-thickness')!;
 const scaleReadout = document.querySelector<HTMLSpanElement>('#scale-readout')!;
+const resetViewBtn = document.querySelector<HTMLButtonElement>('#btn-reset-view')!;
 
 function setActiveButton(active: HTMLButtonElement): void {
   [selectBtn, drawWallBtn].forEach((btn) => btn.classList.toggle('active', btn === active));
@@ -64,6 +70,10 @@ canvas.setOnScaleChange((scale) => {
   scaleReadout.textContent = `Масштаб: ${Math.round(scale * 100)}%`;
 });
 
+resetViewBtn.addEventListener('click', () => {
+  canvas.resetView();
+});
+
 function isTypingInField(): boolean {
   const active = document.activeElement;
   return active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement;
@@ -80,7 +90,10 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  if (event.ctrlKey && event.key.toLowerCase() === 'z') {
+  // event.key зависит от раскладки — при русской раскладке Ctrl+Z даёт
+  // key: 'я', а не 'z'. event.code — это физическая клавиша на клавиатуре,
+  // от раскладки не зависит. metaKey — тот же жест на macOS (⌘Z).
+  if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ') {
     event.preventDefault();
     canvas.undo();
   }

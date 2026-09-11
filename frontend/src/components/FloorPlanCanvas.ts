@@ -45,6 +45,8 @@ const WALL_COLLISION_IGNORE_RADIUS_PX = 2;
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
 const ZOOM_STEP = 1.05;
+// Отступ от краёв экрана при "вписать в экран" (resetView) — в экранных px.
+const VIEW_RESET_PADDING_PX = 60;
 
 // Статичное поле сетки: ±GRID_HALF_EXTENT_PX от начала координат сцены
 // (100 м в сумме на ось при PIXELS_PER_CM=2) — с запасом под "план шириной
@@ -58,7 +60,11 @@ const GRID_MINOR_VISIBLE_ABOVE_SCALE = 0.4;
 
 const UNDO_STACK_DEPTH = 50;
 
-type JointEntry = { wall: Wall; end: 'start' | 'end' };
+// Точки считаются одним стыком, если расстояние между ними не больше
+// этого допуска — в САНТИМЕТРАХ (домен WallData), сравнение никак не
+// зависит от текущего зума экрана.
+const JOINT_TOLERANCE_CM = 1;
+
 type WallSnap =
   | { kind: 'corner'; point: WallEndpoint; wall: Wall }
   | { kind: 'face'; point: WallEndpoint; throughWall: Wall };
@@ -86,7 +92,6 @@ export class FloorPlanCanvas {
 
   private workspaces = new Map<string, Workspace>();
   private walls = new Map<string, Wall>();
-  private jointPoints = new Map<string, JointEntry[]>();
 
   private mode: CanvasMode = 'select';
   private selectedId: string | null = null;
@@ -209,6 +214,26 @@ export class FloorPlanCanvas {
       this.stage.batchDraw();
     });
     resizeObserver.observe(this.stage.container());
+
+    // Пока рисуем стену, курсор мог уйти за пределы холста без отпускания
+    // кнопки (её отпустят уже на window — см. handleWindowPointerUp) —
+    // саму протяжку это не прерывает. А вот "призрак"/индикатор
+    // примагничивания, которые показываются ДО начала протяжки, обязаны
+    // исчезнуть: иначе они зависают на краю холста после того, как курсор
+    // его покинул, и mousemove для их обновления больше не приходит.
+    this.stage.container().addEventListener('mouseleave', () => {
+      if (this.wallDrawStart) {
+        return;
+      }
+      this.updateWallGhost(null);
+      this.updateWallSnapIndicator(null);
+      this.structureLayer.batchDraw();
+    });
+
+    // Применяем режим по умолчанию: без этого вызова stage.draggable()
+    // остаётся false и курсор — не 'default'/'crosshair' до первого клика
+    // по кнопке тулбара, хотя this.mode уже логически 'select'.
+    this.setMode(this.mode);
   }
 
   private handleMiddleButtonPanMove(event: MouseEvent): void {
@@ -257,10 +282,14 @@ export class FloorPlanCanvas {
       y: pointer.y - pointTo.y * newScale,
     });
     this.stage.batchDraw();
+    this.applyZoomVisuals(newScale);
+  }
 
-    this.gridMinorRect?.visible(newScale > GRID_MINOR_VISIBLE_ABOVE_SCALE);
+  /** Видимость мелкой сетки и колбэк масштаба — общий хвост zoom-логики (колесо/сброс вида). */
+  private applyZoomVisuals(scale: number): void {
+    this.gridMinorRect?.visible(scale > GRID_MINOR_VISIBLE_ABOVE_SCALE);
     this.gridLayer.batchDraw();
-    this.onScaleChange?.(newScale);
+    this.onScaleChange?.(scale);
   }
 
   /** Текущий масштаб сцены (1 = 100%). */
@@ -272,6 +301,59 @@ export class FloorPlanCanvas {
   setOnScaleChange(callback: (scale: number) => void): void {
     this.onScaleChange = callback;
     callback(this.stage.scaleX());
+  }
+
+  /**
+   * Сброс вида: если на сцене есть стены/рабочие места — масштаб и позиция
+   * подбираются так, чтобы их общий bounding box (через getClientRect,
+   * уже в координатах сцены — relativeTo: stage убирает текущие pan/zoom)
+   * поместился в экран с отступом VIEW_RESET_PADDING_PX по краям. Если
+   * сцена пуста — минимальный вариант: scale 1, position {x:0, y:0}.
+   * Нужно на масштабе вроде 10%, где пары протяжек панорамирования
+   * достаточно, чтобы уехать за статичное поле сетки в чистый фон без
+   * ориентиров — вернуться иначе нечем.
+   */
+  resetView(): void {
+    const rects: { x: number; y: number; width: number; height: number }[] = [];
+    this.walls.forEach((wall) => rects.push(wall.rect.getClientRect({ relativeTo: this.stage })));
+    this.workspaces.forEach((workspace) =>
+      rects.push(workspace.group.getClientRect({ relativeTo: this.stage })),
+    );
+
+    if (rects.length === 0) {
+      this.stage.scale({ x: 1, y: 1 });
+      this.stage.position({ x: 0, y: 0 });
+      this.stage.batchDraw();
+      this.applyZoomVisuals(1);
+      return;
+    }
+
+    const minX = Math.min(...rects.map((r) => r.x));
+    const minY = Math.min(...rects.map((r) => r.y));
+    const maxX = Math.max(...rects.map((r) => r.x + r.width));
+    const maxY = Math.max(...rects.map((r) => r.y + r.height));
+    const contentWidth = maxX - minX;
+    const contentHeight = maxY - minY;
+
+    const availableWidth = Math.max(1, this.stage.width() - VIEW_RESET_PADDING_PX * 2);
+    const availableHeight = Math.max(1, this.stage.height() - VIEW_RESET_PADDING_PX * 2);
+
+    const fitScale = Math.min(
+      contentWidth > 0 ? availableWidth / contentWidth : MAX_ZOOM,
+      contentHeight > 0 ? availableHeight / contentHeight : MAX_ZOOM,
+    );
+    const newScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fitScale));
+
+    const centerX = minX + contentWidth / 2;
+    const centerY = minY + contentHeight / 2;
+
+    this.stage.scale({ x: newScale, y: newScale });
+    this.stage.position({
+      x: this.stage.width() / 2 - centerX * newScale,
+      y: this.stage.height() / 2 - centerY * newScale,
+    });
+    this.stage.batchDraw();
+    this.applyZoomVisuals(newScale);
   }
 
   /**
@@ -405,91 +487,81 @@ export class FloorPlanCanvas {
     const wall = new Wall(data, (selected) => this.select(selected.rect, selected.id));
     wall.setDraggable(this.mode === 'select');
     wall.rect.on('dragstart transformstart', () => this.pushUndoSnapshot());
+    // transformend стены сначала отрабатывает у самого Wall (нормализует
+    // scale в width/height) — этот слушатель добавлен позже, значит вызовется
+    // после, и rebuildJoints увидит уже нормализованную геометрию.
+    wall.rect.on('dragend transformend', () => this.rebuildJoints());
     this.structureLayer.add(wall.rect);
     this.walls.set(data.id, wall);
-    this.registerWallJoints(data, wall);
+    this.rebuildJoints();
     this.transformer.moveToTop();
     this.structureLayer.batchDraw();
     return wall;
   }
 
   /**
-   * Регистрирует обе концевые точки стены в общем реестре стыков. Как
-   * только в одной точке оказывается вторая (или третья...) стена, все
-   * стены в этой точке одноразово удлиняются на свою половину толщины
-   * ("квадратный торец") — это закрывает щель/нахлёст на углу без
-   * построения точного полигона объединения.
+   * Собирает стыки заново из ТЕКУЩЕЙ геометрии всех стен — не накопленное
+   * состояние, а пересчёт с нуля при каждом вызове. Раньше реестр запоминал
+   * координаты на момент создания стены (округлённые в строковый ключ) и
+   * никогда не обновлялся при перетаскивании/трансформации — стыки не
+   * переживали drag: удлинения оставались висеть в старых точках, а перед
+   * новыми (реальными) концами не выставлялись. Здесь вместо ключа —
+   * сравнение расстояний с допуском JOINT_TOLERANCE_CM, и вызывается это
+   * после любого структурного изменения (создание, удаление, dragend,
+   * transformend), а не один раз при создании.
    */
-  private registerWallJoints(data: WallData, wall: Wall): void {
-    const rad = (data.rotation * Math.PI) / 180;
-    const endPoint: WallEndpoint = {
-      x: data.x + Math.cos(rad) * data.length,
-      y: data.y + Math.sin(rad) * data.length,
-    };
+  private rebuildJoints(): void {
+    type Endpoint = { wall: Wall; end: 'start' | 'end'; point: WallEndpoint };
 
-    this.registerJointEnd({ x: data.x, y: data.y }, wall, 'start');
-    this.registerJointEnd(endPoint, wall, 'end');
-  }
-
-  private registerJointEnd(pointCm: WallEndpoint, wall: Wall, end: 'start' | 'end'): void {
-    const key = `${Math.round(pointCm.x)}:${Math.round(pointCm.y)}`;
-    const entries = this.jointPoints.get(key) ?? [];
-    entries.push({ wall, end });
-    this.jointPoints.set(key, entries);
-
-    if (entries.length < 2) {
-      return;
-    }
-    entries.forEach((entry) => {
-      const extendCm = entry.wall.thicknessCm / 2;
-      if (entry.end === 'start') {
-        entry.wall.setStartExtension(extendCm);
-      } else {
-        entry.wall.setEndExtension(extendCm);
-      }
+    const endpoints: Endpoint[] = [];
+    this.walls.forEach((wall) => {
+      const data = wall.toData();
+      const rad = (data.rotation * Math.PI) / 180;
+      endpoints.push({ wall, end: 'start', point: { x: data.x, y: data.y } });
+      endpoints.push({
+        wall,
+        end: 'end',
+        point: {
+          x: data.x + Math.cos(rad) * data.length,
+          y: data.y + Math.sin(rad) * data.length,
+        },
+      });
     });
-  }
 
-  /**
-   * Обратная операция к registerJointEnd: убирает стену из реестра стыков
-   * в точке (start/end до удаления) и пересчитывает удлинение оставшихся
-   * там стен — 0, если стык распался (осталась одна или ноль стен), снова
-   * полтолщины, если стык всё ещё держат 2+. Нужна для Т-05: без неё торец
-   * соседней стены так и остался бы вытянут в пустоту после удаления.
-   */
-  private unregisterWallJoints(wall: Wall): void {
-    const data = wall.toData();
-    const rad = (data.rotation * Math.PI) / 180;
-    const endPoint: WallEndpoint = {
-      x: data.x + Math.cos(rad) * data.length,
-      y: data.y + Math.sin(rad) * data.length,
-    };
-
-    this.unregisterJointEnd({ x: data.x, y: data.y }, wall);
-    this.unregisterJointEnd(endPoint, wall);
-  }
-
-  private unregisterJointEnd(pointCm: WallEndpoint, wall: Wall): void {
-    const key = `${Math.round(pointCm.x)}:${Math.round(pointCm.y)}`;
-    const entries = this.jointPoints.get(key);
-    if (!entries) {
-      return;
-    }
-
-    const remaining = entries.filter((entry) => entry.wall !== wall);
-    if (remaining.length === 0) {
-      this.jointPoints.delete(key);
-      return;
-    }
-    this.jointPoints.set(key, remaining);
-
-    remaining.forEach((entry) => {
-      const extendCm = remaining.length >= 2 ? entry.wall.thicknessCm / 2 : 0;
-      if (entry.end === 'start') {
-        entry.wall.setStartExtension(extendCm);
-      } else {
-        entry.wall.setEndExtension(extendCm);
+    const used = new Set<Endpoint>();
+    const groups: Endpoint[][] = [];
+    for (const endpoint of endpoints) {
+      if (used.has(endpoint)) {
+        continue;
       }
+      const group = [endpoint];
+      used.add(endpoint);
+      for (const other of endpoints) {
+        if (used.has(other)) {
+          continue;
+        }
+        const dist = Math.hypot(
+          endpoint.point.x - other.point.x,
+          endpoint.point.y - other.point.y,
+        );
+        if (dist <= JOINT_TOLERANCE_CM) {
+          group.push(other);
+          used.add(other);
+        }
+      }
+      groups.push(group);
+    }
+
+    groups.forEach((group) => {
+      const isJoint = group.length >= 2;
+      group.forEach((entry) => {
+        const extendCm = isJoint ? entry.wall.thicknessCm / 2 : 0;
+        if (entry.end === 'start') {
+          entry.wall.setStartExtension(extendCm);
+        } else {
+          entry.wall.setEndExtension(extendCm);
+        }
+      });
     });
   }
 
@@ -772,9 +844,11 @@ export class FloorPlanCanvas {
 
     const wall = this.walls.get(this.selectedId);
     if (wall) {
-      this.unregisterWallJoints(wall);
       wall.rect.destroy();
       this.walls.delete(this.selectedId);
+      // Удаляем из карты ДО пересчёта, чтобы rebuildJoints увидел уже
+      // остальных соседей и корректно снял/оставил их удлинения.
+      this.rebuildJoints();
       this.structureLayer.batchDraw();
     } else {
       const workspace = this.workspaces.get(this.selectedId);
@@ -798,9 +872,10 @@ export class FloorPlanCanvas {
   /**
    * Пересоздаёт сцену из снимка: сначала снимает выделение (иначе
    * Transformer останется со ссылками на уже уничтоженные узлы и упадёт
-   * при первом обращении), затем уничтожает текущие узлы, чистит карты и
-   * реестр стыков, и только потом создаёт всё заново через addWall/
-   * addWorkspace — они же заново регистрируют стыки.
+   * при первом обращении), затем уничтожает текущие узлы и чистит карты,
+   * и только потом создаёт всё заново через addWall/addWorkspace — стыки
+   * пересчитываются сами внутри addWall (rebuildJoints), реестра стыков
+   * как отдельного состояния больше нет.
    */
   private restore(data: SceneData): void {
     this.isRestoring = true;
@@ -810,7 +885,6 @@ export class FloorPlanCanvas {
     this.walls.clear();
     this.workspaces.forEach((workspace) => workspace.group.destroy());
     this.workspaces.clear();
-    this.jointPoints.clear();
 
     data.walls.forEach((wallData) => this.addWall(wallData));
     data.workspaces.forEach((workspaceData) => this.addWorkspace(workspaceData));

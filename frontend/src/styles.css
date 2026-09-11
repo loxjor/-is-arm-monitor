@@ -13,16 +13,26 @@ body {
   font-family: system-ui, sans-serif;
 }
 
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * Тулбар — обычный блок в потоке (не position: fixed поверх канваса):
+ * иначе он перекрывает верхнюю полосу холста, и протяжка стены там не
+ * начинается — клик просто не доходит до Konva. #app занимает всё, что
+ * осталось ниже тулбара, через flex.
+ */
 #app {
-  width: 100vw;
-  height: 100vh;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
 }
 
 #toolbar {
-  position: fixed;
-  top: 12px;
-  left: 12px;
-  z-index: 10;
+  flex: 0 0 auto;
+  margin: 12px;
   display: flex;
   gap: 8px;
   padding: 8px;
