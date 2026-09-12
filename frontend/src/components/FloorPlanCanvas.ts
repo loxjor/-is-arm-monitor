@@ -5,6 +5,7 @@ import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
 import type { WallNode, WallSegment } from '../types/wall';
 import type { SceneData, SceneDataV1 } from '../types/scene';
 import { migrateSceneData } from '../utils/wallGraph';
+import { computeNodeFaceVertices, buildSegmentPolygon, type NodeRay } from '../utils/wallPolygon';
 import { generateId } from '../utils/id';
 import { cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
@@ -95,6 +96,12 @@ export class FloorPlanCanvas {
   private mode: CanvasMode = 'select';
   private selectedId: string | null = null;
   private wallThicknessCm: Cm = cm(DEFAULT_WALL_THICKNESS_CM);
+  // Толщина выделенной стены меняется вживую при каждом вводе в поле
+  // тулбара (см. setWallThickness), но в undo должно попасть ОДНО действие
+  // на всю сессию редактирования, а не одно на каждое нажатие клавиши —
+  // флаг взводится при первом реальном изменении после выделения и
+  // сбрасывается при следующей смене выделения.
+  private selectedWallThicknessSnapshotTaken = false;
 
   private undoStack: SceneData[] = [];
   // На время restore() регистрация узлов/сегментов/рабочих мест не должна
@@ -311,7 +318,7 @@ export class FloorPlanCanvas {
    */
   resetView(): void {
     const rects: { x: number; y: number; width: number; height: number }[] = [];
-    this.walls.forEach((wall) => rects.push(wall.rect.getClientRect({ relativeTo: this.stage })));
+    this.walls.forEach((wall) => rects.push(wall.line.getClientRect({ relativeTo: this.stage })));
     this.workspaces.forEach((workspace) =>
       rects.push(workspace.group.getClientRect({ relativeTo: this.stage })),
     );
@@ -399,12 +406,32 @@ export class FloorPlanCanvas {
     this.gridLayer.batchDraw();
   }
 
-  /** Возвращает применённое (обрезанное в допустимый диапазон) значение. */
+  /**
+   * Возвращает применённое (обрезанное в допустимый диапазон) значение.
+   * Всегда обновляет толщину, с которой начнётся СЛЕДУЮЩАЯ новая стена; если
+   * при этом выделена существующая стена — меняет толщину и ей тоже (это и
+   * есть единственный способ поменять толщину уже нарисованной стены в этой
+   * модели: Transformer на полигон с митром больше не навешивается — тянуть
+   * его за анкер значило бы искажать уже посчитанные вершины стыков).
+   * Изменения при выделенной стене снимаются ОДНИМ Ctrl+Z на всю сессию
+   * редактирования (см. selectedWallThicknessSnapshotTaken), а не по одному
+   * на каждое нажатие клавиши в поле.
+   */
   setWallThickness(thicknessCm: number): Cm {
-    this.wallThicknessCm = cm(
-      Math.min(MAX_WALL_THICKNESS_CM, Math.max(MIN_WALL_THICKNESS_CM, thicknessCm)),
-    );
-    return this.wallThicknessCm;
+    const clamped = cm(Math.min(MAX_WALL_THICKNESS_CM, Math.max(MIN_WALL_THICKNESS_CM, thicknessCm)));
+    this.wallThicknessCm = clamped;
+
+    const selectedWall = this.selectedId ? this.walls.get(this.selectedId) : undefined;
+    if (selectedWall && selectedWall.thicknessCm !== clamped) {
+      if (!this.selectedWallThicknessSnapshotTaken) {
+        this.pushUndoSnapshot();
+        this.selectedWallThicknessSnapshotTaken = true;
+      }
+      selectedWall.thicknessCm = clamped;
+      this.rebuildWallGeometry();
+    }
+
+    return clamped;
   }
 
   getWallThickness(): Cm {
@@ -478,9 +505,7 @@ export class FloorPlanCanvas {
   addWorkspace(data: WorkspaceData): Workspace {
     this.pushUndoSnapshot();
 
-    const workspace = new Workspace(data, (selected) =>
-      this.select(selected.group, selected.id, 'workspace'),
-    );
+    const workspace = new Workspace(data, (selected) => this.selectWorkspace(selected));
     workspace.setDraggable(this.mode === 'select');
     workspace.group.on('dragstart transformstart', () => this.pushUndoSnapshot());
     this.mainLayer.add(workspace.group);
@@ -523,36 +548,85 @@ export class FloorPlanCanvas {
     this.nodes.set(node.id, node);
   }
 
-  /** Регистрирует сегмент, создаёт его Konva-представление. Без снимка в undo — см. registerWallNode. */
+  /**
+   * Регистрирует сегмент, создаёт его Konva-представление. Полигон не
+   * строится здесь же — точки известны только после rebuildWallGeometry
+   * (нужна геометрия ВСЕХ сегментов в затронутых узлах, не только этого),
+   * так что вызывающий обязан вызвать её сам следом. Без снимка в undo —
+   * см. registerWallNode.
+   */
   private registerWallSegment(segment: WallSegment): Wall {
-    const startPx = this.nodePointPx(segment.startNodeId);
-    const endPx = this.nodePointPx(segment.endNodeId);
-
-    const wall = new Wall(
-      segment,
-      startPx,
-      endPx,
-      (selected) => this.select(selected.rect, selected.id, 'wall'),
-      (selected) => this.handleWallThicknessChanged(selected),
-    );
+    const wall = new Wall(segment, (selected) => this.selectWall(selected));
     wall.setDraggable(this.mode === 'select');
-    wall.rect.on('dragstart transformstart', () => this.pushUndoSnapshot());
-    wall.rect.on('dragend', () => this.handleWallDragEnd(wall));
-    this.structureLayer.add(wall.rect);
+    wall.line.on('dragstart transformstart', () => this.pushUndoSnapshot());
+    wall.line.on('dragend', () => this.handleWallDragEnd(wall));
+    this.structureLayer.add(wall.line);
     this.walls.set(segment.id, wall);
     this.transformer.moveToTop();
     return wall;
   }
 
   /**
-   * После ресайза толщины Transformer'ом позиция/поворот прямоугольника
-   * переустанавливаются из КАНОНИЧЕСКИХ координат узлов — вне зависимости
-   * от того, что Transformer сделал с rect.x()/y() при растяжении. Ось
-   * стены поэтому физически не может сдвинуться от изменения толщины
-   * (Д-05) — ей неоткуда взяться, кроме этих двух точек.
+   * Пересчитывает полигоны ВСЕХ стен из текущего графа узлов — источник
+   * истины по геометрии стыков (смещённые грани + вершина угла как
+   * пересечение граней смежных рёбер, см. utils/wallPolygon.ts), а не
+   * накопленное состояние: узел сдвинулся — соседние стены при следующем
+   * вызове просто получат новые точки как есть. Дёшево пересчитать всё
+   * целиком, а не только затронутые узлы: даже на плане в несколько сотен
+   * стен это O(рёбра), без ощутимой задержки на каждое действие.
    */
-  private handleWallThicknessChanged(wall: Wall): void {
-    wall.render(this.nodePointPx(wall.startNodeId), this.nodePointPx(wall.endNodeId));
+  private rebuildWallGeometry(): void {
+    const raysByNode = new Map<string, NodeRay[]>();
+    const pushRay = (nodeId: string, ray: NodeRay): void => {
+      const existing = raysByNode.get(nodeId);
+      if (existing) {
+        existing.push(ray);
+      } else {
+        raysByNode.set(nodeId, [ray]);
+      }
+    };
+
+    this.walls.forEach((wall) => {
+      const startNode = this.nodes.get(wall.startNodeId);
+      const endNode = this.nodes.get(wall.endNodeId);
+      if (!startNode || !endNode) {
+        return;
+      }
+      const startPx = { x: cmToPx(startNode.x), y: cmToPx(startNode.y) };
+      const endPx = { x: cmToPx(endNode.x), y: cmToPx(endNode.y) };
+      const dx = endPx.x - startPx.x;
+      const dy = endPx.y - startPx.y;
+      const length = Math.hypot(dx, dy) || 1;
+      const dir = { x: dx / length, y: dy / length };
+      const halfThickness = cmToPx(wall.thicknessCm) / 2;
+
+      pushRay(wall.startNodeId, { key: `${wall.id}:start`, dir, halfThickness });
+      pushRay(wall.endNodeId, {
+        key: `${wall.id}:end`,
+        dir: { x: -dir.x, y: -dir.y },
+        halfThickness,
+      });
+    });
+
+    const faceByRayKey = new Map<string, { left: WallEndpoint; right: WallEndpoint }>();
+    raysByNode.forEach((rays, nodeId) => {
+      const node = this.nodes.get(nodeId);
+      if (!node) {
+        return;
+      }
+      const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
+      computeNodeFaceVertices(nodePx, rays).forEach((face, key) => faceByRayKey.set(key, face));
+    });
+
+    this.walls.forEach((wall) => {
+      const startFace = faceByRayKey.get(`${wall.id}:start`);
+      const endFace = faceByRayKey.get(`${wall.id}:end`);
+      if (!startFace || !endFace) {
+        return;
+      }
+      wall.render(buildSegmentPolygon(startFace, endFace));
+    });
+
     this.structureLayer.batchDraw();
   }
 
@@ -560,39 +634,34 @@ export class FloorPlanCanvas {
    * Перетаскивание тела стены двигает ОБА её узла на одну и ту же дельту —
    * и, следовательно, автоматически тянет за собой любую другую стену,
    * которая делит с этой один из узлов (угол остаётся сомкнутым без
-   * отдельного пересчёта). Дельта берётся из того, куда Konva уже сдвинул
-   * rect при перетаскивании, сравнивая с канонической позицией начального
-   * узла до этого жеста.
+   * отдельного пересчёта стыков, только полный пересчёт геометрии). Дельта
+   * — это то, куда Konva уже сдвинул сам Line при перетаскивании: точки
+   * полигона (points) при drag не меняются, меняются только x/y самой
+   * фигуры, так что после жеста x/y и есть дельта в px, а не отдельная
+   * позиция, которую пришлось бы сравнивать с координатами узла.
    */
   private handleWallDragEnd(wall: Wall): void {
+    const deltaPxX = wall.line.x();
+    const deltaPxY = wall.line.y();
+    if (deltaPxX === 0 && deltaPxY === 0) {
+      return;
+    }
+    wall.line.position({ x: 0, y: 0 });
+
     const startNode = this.nodes.get(wall.startNodeId);
     const endNode = this.nodes.get(wall.endNodeId);
     if (!startNode || !endNode) {
       return;
     }
 
-    const deltaXCm = pxToCm(wall.rect.x() - cmToPx(startNode.x));
-    const deltaYCm = pxToCm(wall.rect.y() - cmToPx(startNode.y));
-    if (deltaXCm === 0 && deltaYCm === 0) {
-      return;
-    }
-
+    const deltaXCm = pxToCm(deltaPxX);
+    const deltaYCm = pxToCm(deltaPxY);
     startNode.x = cm(startNode.x + deltaXCm);
     startNode.y = cm(startNode.y + deltaYCm);
     endNode.x = cm(endNode.x + deltaXCm);
     endNode.y = cm(endNode.y + deltaYCm);
 
-    this.renderWallsAtNodes(new Set([wall.startNodeId, wall.endNodeId]));
-  }
-
-  /** Перерисовывает все сегменты, у которых начало ИЛИ конец — один из перечисленных узлов. */
-  private renderWallsAtNodes(nodeIds: ReadonlySet<string>): void {
-    this.walls.forEach((wall) => {
-      if (nodeIds.has(wall.startNodeId) || nodeIds.has(wall.endNodeId)) {
-        wall.render(this.nodePointPx(wall.startNodeId), this.nodePointPx(wall.endNodeId));
-      }
-    });
-    this.structureLayer.batchDraw();
+    this.rebuildWallGeometry();
   }
 
   /**
@@ -623,7 +692,7 @@ export class FloorPlanCanvas {
       thickness: thicknessCm,
     });
     this.transformer.moveToTop();
-    this.structureLayer.batchDraw();
+    this.rebuildWallGeometry();
     return wall;
   }
 
@@ -843,38 +912,44 @@ export class FloorPlanCanvas {
   }
 
   /**
-   * Transformer у стены даёт только два анкера — верх/низ (меняют высоту
-   * прямоугольника, т.е. толщину) — и не может вращать: длина и положение
-   * стены выводятся из узлов, а не хранятся в самом прямоугольнике, поэтому
-   * анкерам, которые раньше меняли длину/поворот, в новой модели нечего
-   * делать. У рабочего места Transformer остаётся полным, как раньше.
+   * У стены больше нет Transformer'а: полигон с уже посчитанным митром на
+   * стыках нельзя осмысленно тянуть за анкер (растяжение просто исказило бы
+   * готовые вершины, которые пересчитываются только из графа узлов) —
+   * выделение стены подсвечивается сменой обводки (Wall.setSelected), а
+   * толщину меняет поле толщины в тулбаре, пока стена выделена (см.
+   * setWallThickness). У рабочего места Transformer остаётся как раньше.
    */
-  private select(node: Konva.Node, id: string, kind: 'wall' | 'workspace'): void {
-    this.selectedId = id;
-    this.transformer.nodes([node]);
-    if (kind === 'wall') {
-      this.transformer.rotateEnabled(false);
-      this.transformer.enabledAnchors(['top-center', 'bottom-center']);
-    } else {
-      this.transformer.rotateEnabled(true);
-      this.transformer.enabledAnchors([
-        'top-left',
-        'top-center',
-        'top-right',
-        'middle-left',
-        'middle-right',
-        'bottom-left',
-        'bottom-center',
-        'bottom-right',
-      ]);
-    }
+  private selectWorkspace(workspace: Workspace): void {
+    this.clearWallSelectionHighlight();
+    this.selectedId = workspace.id;
+    this.selectedWallThicknessSnapshotTaken = false;
+    this.transformer.nodes([workspace.group]);
     this.transformer.getLayer()?.batchDraw();
   }
 
+  private selectWall(wall: Wall): void {
+    this.clearWallSelectionHighlight();
+    this.selectedId = wall.id;
+    this.selectedWallThicknessSnapshotTaken = false;
+    this.transformer.nodes([]);
+    wall.setSelected(true);
+    this.transformer.getLayer()?.batchDraw();
+    this.structureLayer.batchDraw();
+  }
+
+  private clearWallSelectionHighlight(): void {
+    if (this.selectedId) {
+      this.walls.get(this.selectedId)?.setSelected(false);
+    }
+  }
+
   private deselect(): void {
+    this.clearWallSelectionHighlight();
     this.selectedId = null;
+    this.selectedWallThicknessSnapshotTaken = false;
     this.transformer.nodes([]);
     this.transformer.getLayer()?.batchDraw();
+    this.structureLayer.batchDraw();
   }
 
   /** Удаляет выделенный объект (стену или рабочее место). Ничего не делает, если ничего не выделено. */
@@ -886,10 +961,10 @@ export class FloorPlanCanvas {
 
     const wall = this.walls.get(this.selectedId);
     if (wall) {
-      wall.rect.destroy();
+      wall.line.destroy();
       this.walls.delete(this.selectedId);
       this.pruneOrphanNodes();
-      this.structureLayer.batchDraw();
+      this.rebuildWallGeometry();
     } else {
       const workspace = this.workspaces.get(this.selectedId);
       workspace?.group.destroy();
@@ -953,7 +1028,7 @@ export class FloorPlanCanvas {
     this.isRestoring = true;
 
     this.deselect();
-    this.walls.forEach((wall) => wall.rect.destroy());
+    this.walls.forEach((wall) => wall.line.destroy());
     this.walls.clear();
     this.nodes.clear();
     this.workspaces.forEach((workspace) => workspace.group.destroy());
@@ -964,7 +1039,7 @@ export class FloorPlanCanvas {
     data.workspaces.forEach((workspaceData) => this.addWorkspace(workspaceData));
 
     this.isRestoring = false;
-    this.structureLayer.batchDraw();
+    this.rebuildWallGeometry();
     this.mainLayer.batchDraw();
   }
 
