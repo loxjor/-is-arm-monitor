@@ -9,6 +9,7 @@ from app.schemas.floor_plan import (
     FloorPlanUpdate,
 )
 from app.services import floor_plan_service
+from app.services.floor_plan_service import InvalidWallGraphError
 
 router = APIRouter(prefix="/floor-plans", tags=["floor-plans"])
 
@@ -20,7 +21,10 @@ def list_floor_plans(db: Session = Depends(get_db)):
 
 @router.post("", response_model=FloorPlanRead, status_code=status.HTTP_201_CREATED)
 def create_floor_plan(data: FloorPlanCreate, db: Session = Depends(get_db)):
-    return floor_plan_service.create_floor_plan(db, data)
+    try:
+        return floor_plan_service.create_floor_plan(db, data)
+    except InvalidWallGraphError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))
 
 
 @router.get("/{floor_plan_id}", response_model=FloorPlanRead)
@@ -36,4 +40,7 @@ def update_floor_plan(floor_plan_id: int, data: FloorPlanUpdate, db: Session = D
     floor_plan = floor_plan_service.get_floor_plan(db, floor_plan_id)
     if floor_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor plan not found")
-    return floor_plan_service.replace_floor_plan(db, floor_plan, data)
+    try:
+        return floor_plan_service.replace_floor_plan(db, floor_plan, data)
+    except InvalidWallGraphError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))

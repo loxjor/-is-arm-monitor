@@ -25,7 +25,10 @@ class FloorPlan(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    walls: Mapped[list["Wall"]] = relationship(
+    nodes: Mapped[list["WallNode"]] = relationship(
+        back_populates="floor_plan", cascade="all, delete-orphan"
+    )
+    segments: Mapped[list["WallSegment"]] = relationship(
         back_populates="floor_plan", cascade="all, delete-orphan"
     )
     workspaces: Mapped[list["Workspace"]] = relationship(

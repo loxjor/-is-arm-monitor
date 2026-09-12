@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FloorPlanApiError, loadFloorPlan, saveFloorPlan } from './floorPlans';
 import type { SceneData } from '../types/scene';
 
-const emptyScene: SceneData = { version: 1, walls: [], workspaces: [] };
+const emptyScene: SceneData = { version: 2, nodes: [], segments: [], workspaces: [] };
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -20,7 +20,7 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
     const detail = [
       {
         type: 'greater_than',
-        loc: ['body', 'walls', 0, 'length'],
+        loc: ['body', 'segments', 0, 'thickness'],
         msg: 'Input should be greater than 0',
       },
     ];
@@ -30,7 +30,7 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
     );
 
     await expect(saveFloorPlan(emptyScene, null)).rejects.toMatchObject({
-      message: 'сервер отклонил данные плана (body.walls.0.length: Input should be greater than 0)',
+      message: 'сервер отклонил данные плана (body.segments.0.thickness: Input should be greater than 0)',
       status: 422,
     });
   });
@@ -87,13 +87,52 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
           background_image_url: null,
           created_at: '2026-01-01T00:00:00Z',
           updated_at: '2026-01-01T00:00:00Z',
-          walls: [],
+          nodes: [],
+          segments: [],
           workspaces: [],
         }),
       ),
     );
 
     await expect(saveFloorPlan(emptyScene, null)).resolves.toBe(42);
+  });
+});
+
+describe('loadFloorPlan', () => {
+  it('перекладывает серверные id узлов/сегментов в свежие локальные, сохраняя связи', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(200, {
+          id: 7,
+          name: 'Мой план',
+          width_cm: 5000,
+          height_cm: 5000,
+          background_image_url: null,
+          created_at: '2026-01-01T00:00:00Z',
+          updated_at: '2026-01-01T00:00:00Z',
+          nodes: [
+            { id: 101, x: 0, y: 0 },
+            { id: 102, x: 100, y: 0 },
+          ],
+          segments: [{ id: 201, start_node_id: 101, end_node_id: 102, thickness: 10 }],
+          workspaces: [],
+        }),
+      ),
+    );
+
+    const scene = await loadFloorPlan(7);
+
+    expect(scene.version).toBe(2);
+    expect(scene.nodes).toHaveLength(2);
+    expect(scene.segments).toHaveLength(1);
+    // id — свежие локальные (не совпадают с серверными числовыми), но
+    // ссылки сегмента по-прежнему указывают на реальные узлы из массива.
+    const [segment] = scene.segments;
+    const nodeIds = new Set(scene.nodes.map((n) => n.id));
+    expect(nodeIds.has(segment.startNodeId)).toBe(true);
+    expect(nodeIds.has(segment.endNodeId)).toBe(true);
+    expect(segment.startNodeId).not.toBe(segment.endNodeId);
   });
 });
 

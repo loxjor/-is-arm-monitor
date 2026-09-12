@@ -1,4 +1,4 @@
-import type { WallData } from '../types/wall';
+import type { WallNode, WallSegment } from '../types/wall';
 import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
 import type { SceneData } from '../types/scene';
 import { cm } from '../utils/scale';
@@ -13,12 +13,21 @@ const DEFAULT_PLAN_NAME = 'Мой план';
 // разумный дефолт, не завязанный на текущий зум/окно браузера.
 const DEFAULT_SCENE_SIZE_CM = 5000;
 
-interface WallPayload {
+interface WallNodePayload {
+  // Узлы и сегменты создаются одним запросом, и на момент запроса у узла
+  // ещё нет id БД, на который мог бы сослаться сегмент — client_id это
+  // локальный id узла на фронтенде (WallNode.id), который сегмент несёт в
+  // start_client_id/end_client_id (см. WallSegmentPayload и бэкендовую
+  // схему WallNodeCreate/WallSegmentCreate).
+  client_id: string;
   x: number;
   y: number;
-  length: number;
+}
+
+interface WallSegmentPayload {
+  start_client_id: string;
+  end_client_id: string;
   thickness: number;
-  rotation: number;
 }
 
 interface WorkspacePayload {
@@ -31,8 +40,17 @@ interface WorkspacePayload {
   status: WorkspaceStatus;
 }
 
-interface WallResponse extends WallPayload {
+interface WallNodeResponse {
   id: number;
+  x: number;
+  y: number;
+}
+
+interface WallSegmentResponse {
+  id: number;
+  start_node_id: number;
+  end_node_id: number;
+  thickness: number;
 }
 
 interface WorkspaceResponse extends WorkspacePayload {
@@ -47,17 +65,20 @@ interface FloorPlanResponse {
   background_image_url: string | null;
   created_at: string;
   updated_at: string;
-  walls: WallResponse[];
+  nodes: WallNodeResponse[];
+  segments: WallSegmentResponse[];
   workspaces: WorkspaceResponse[];
 }
 
-function toWallPayload(wall: WallData): WallPayload {
+function toNodePayload(node: WallNode): WallNodePayload {
+  return { client_id: node.id, x: node.x, y: node.y };
+}
+
+function toSegmentPayload(segment: WallSegment): WallSegmentPayload {
   return {
-    x: wall.x,
-    y: wall.y,
-    length: wall.length,
-    thickness: wall.thickness,
-    rotation: wall.rotation,
+    start_client_id: segment.startNodeId,
+    end_client_id: segment.endNodeId,
+    thickness: segment.thickness,
   };
 }
 
@@ -73,19 +94,32 @@ function toWorkspacePayload(workspace: WorkspaceData): WorkspacePayload {
   };
 }
 
-// У стен/рабочих мест с сервера — целочисленный id БД, а не тот
+// У узлов/сегментов/рабочих мест с сервера — целочисленный id БД, а не тот
 // string-идентификатор, которым оперирует Konva-сцена. Это разные
 // идентичности (серверная — персистентность, локальная — узел на холсте),
-// поэтому при загрузке генерируем свежий локальный id, а не переиспользуем
-// серверный.
-function fromWallResponse(wall: WallResponse): WallData {
-  return {
+// поэтому при загрузке генерируем свежие локальные id, а не переиспользуем
+// серверные — и заодно перекладываем ссылки сегментов на узлы (start_node_id/
+// end_node_id) через карту "серверный id → свежий локальный id".
+function fromFloorPlanResponse(data: FloorPlanResponse): SceneData {
+  const localNodeId = new Map<number, string>();
+  const nodes: WallNode[] = data.nodes.map((node) => {
+    const id = generateId('node');
+    localNodeId.set(node.id, id);
+    return { id, x: cm(node.x), y: cm(node.y) };
+  });
+
+  const segments: WallSegment[] = data.segments.map((segment) => ({
     id: generateId('wall'),
-    x: cm(wall.x),
-    y: cm(wall.y),
-    length: cm(wall.length),
-    thickness: cm(wall.thickness),
-    rotation: wall.rotation,
+    startNodeId: localNodeId.get(segment.start_node_id)!,
+    endNodeId: localNodeId.get(segment.end_node_id)!,
+    thickness: cm(segment.thickness),
+  }));
+
+  return {
+    version: 2,
+    nodes,
+    segments,
+    workspaces: data.workspaces.map(fromWorkspaceResponse),
   };
 }
 
@@ -186,7 +220,8 @@ export async function saveFloorPlan(scene: SceneData, existingId: number | null)
     width_cm: DEFAULT_SCENE_SIZE_CM,
     height_cm: DEFAULT_SCENE_SIZE_CM,
     background_image_url: null,
-    walls: scene.walls.map(toWallPayload),
+    nodes: scene.nodes.map(toNodePayload),
+    segments: scene.segments.map(toSegmentPayload),
     workspaces: scene.workspaces.map(toWorkspacePayload),
   };
 
@@ -217,9 +252,5 @@ export async function loadFloorPlan(id: number): Promise<SceneData> {
   }
 
   const data = (await response.json()) as FloorPlanResponse;
-  return {
-    version: 1,
-    walls: data.walls.map(fromWallResponse),
-    workspaces: data.workspaces.map(fromWorkspaceResponse),
-  };
+  return fromFloorPlanResponse(data);
 }

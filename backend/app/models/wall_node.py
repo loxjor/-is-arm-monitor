@@ -6,10 +6,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 
-class Wall(Base):
-    """Сегмент стены. x/y/length/thickness — см, rotation — градусы."""
+class WallNode(Base):
+    """Узел графа стен — общая вершина, которую делят сходящиеся в ней сегменты. x/y — см."""
 
-    __tablename__ = "walls"
+    __tablename__ = "wall_nodes"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     floor_plan_id: Mapped[int] = mapped_column(
@@ -17,8 +17,5 @@ class Wall(Base):
     )
     x: Mapped[float] = mapped_column(Float)
     y: Mapped[float] = mapped_column(Float)
-    length: Mapped[float] = mapped_column(Float)
-    thickness: Mapped[float] = mapped_column(Float)
-    rotation: Mapped[float] = mapped_column(Float)
 
-    floor_plan: Mapped["FloorPlan"] = relationship(back_populates="walls")
+    floor_plan: Mapped["FloorPlan"] = relationship(back_populates="nodes")

@@ -2,7 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.schemas.wall import WallCreate, WallRead
+from app.schemas.wall_node import WallNodeCreate, WallNodeRead
+from app.schemas.wall_segment import WallSegmentCreate, WallSegmentRead
 from app.schemas.workspace import WorkspaceCreate, WorkspaceRead
 
 
@@ -16,7 +17,8 @@ class FloorPlanBase(BaseModel):
 
 
 class FloorPlanCreate(FloorPlanBase):
-    walls: list[WallCreate] = Field(default_factory=list)
+    nodes: list[WallNodeCreate] = Field(default_factory=list)
+    segments: list[WallSegmentCreate] = Field(default_factory=list)
     workspaces: list[WorkspaceCreate] = Field(default_factory=list)
 
 
@@ -33,7 +35,8 @@ class FloorPlanRead(FloorPlanBase):
     id: int
     created_at: datetime
     updated_at: datetime
-    walls: list[WallRead]
+    nodes: list[WallNodeRead]
+    segments: list[WallSegmentRead]
     workspaces: list[WorkspaceRead]
 
     model_config = ConfigDict(from_attributes=True)
