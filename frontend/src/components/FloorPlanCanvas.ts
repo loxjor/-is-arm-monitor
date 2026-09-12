@@ -45,6 +45,12 @@ const GUIDE_HIGHLIGHT_RADIUS_PX = 40;
 // радиуса считаются "тем же" углом здания и совмещаются один-в-один (для
 // угла — путём переиспользования id существующего узла, см. findWallSnapPx).
 const WALL_JOINT_SNAP_RADIUS_PX = 24;
+// Призрак и точка старта/конца стены рядом с чужой стеной садятся на её
+// ГРАНЬ (как физический объект — не заходят внутрь тела), а не на ось: ось
+// (T-примыкание, см. splitWallAtPoint) — только когда курсор целится
+// почти точно в центр тела стены, а не просто "где-то рядом с ней". Этот
+// порог поэтому заметно меньше WALL_JOINT_SNAP_RADIUS_PX.
+const WALL_AXIS_SNAP_RADIUS_PX = 6;
 const SNAP_INDICATOR_RADIUS_PX = 6;
 
 // Столкновения ближе этого расстояния от точки старта игнорируем — обычно
@@ -73,7 +79,8 @@ const UNDO_STACK_DEPTH = 50;
 
 type WallSnap =
   | { kind: 'corner'; point: WallEndpoint; nodeId: string }
-  | { kind: 'axis'; point: WallEndpoint; wallId: string };
+  | { kind: 'axis'; point: WallEndpoint; wallId: string }
+  | { kind: 'face'; point: WallEndpoint };
 
 /**
  * Обёртка над Konva.Stage: слой фона (план этажа), слой стен (структура
@@ -680,11 +687,13 @@ export class FloorPlanCanvas {
   /**
    * Завершает рисование новой стены: узел на конце, примагниченном к
    * существующему углу (snap.kind === 'corner'), — это ТОТ ЖЕ узел (тот же
-   * id), а не новый с совпадающими координатами; конец, примагниченный к
-   * оси существующей стены (snap.kind === 'axis'), разбивает эту стену
-   * узлом (см. splitWallAtPoint) — T-стык становится обычным узлом с тремя
-   * рёбрами; остальные концы получают свежий несвязанный узел в точке, где
-   * остановилась протяжка.
+   * id), а не новый с совпадающими координатами; конец, примагниченный
+   * ТОЧНО к оси существующей стены (snap.kind === 'axis'), разбивает эту
+   * стену узлом (см. splitWallAtPoint) — T-стык становится обычным узлом с
+   * тремя рёбрами; конец рядом с гранью стены (snap.kind === 'face') и
+   * остальные концы получают свежий несвязанный узел в точке, где
+   * остановилась протяжка (для 'face' — ровно на грани, стена не
+   * разбивается).
    */
   private finishWallDraw(
     startPointPx: WallEndpoint,
@@ -781,6 +790,10 @@ export class FloorPlanCanvas {
     return WALL_JOINT_SNAP_RADIUS_PX / this.stage.scaleX();
   }
 
+  private get axisSnapRadiusPx(): number {
+    return WALL_AXIS_SNAP_RADIUS_PX / this.stage.scaleX();
+  }
+
   private get collisionIgnoreRadiusPx(): number {
     return WALL_COLLISION_IGNORE_RADIUS_PX / this.stage.scaleX();
   }
@@ -794,21 +807,30 @@ export class FloorPlanCanvas {
   }
 
   /**
-   * Привязка точки к уже существующей геометрии:
+   * Привязка точки к уже существующей геометрии — призрак и точка старта/
+   * конца стены ведут себя как физический объект: не заходят внутрь тела
+   * чужой стены, а садятся на её грань, — и только точное наведение в
+   * центр тела стены (в пределах axisSnapRadiusPx, заметно уже общего
+   * snapRadiusPx) даёт "ось" и намерение её разбить:
    *  - "corner" — курсор рядом с УЗЛОМ графа (любым, вне зависимости от
    *    того, сколько сегментов на него ссылается) — примагничивание к узлу,
    *    а не к псевдо-углу, выведенному из прямоугольника стены, и есть тот
    *    механизм, который заставляет новую стену РАЗДЕЛИТЬ существующую
    *    вершину, а не создать рядом другую с теми же координатами;
-   *  - "axis" — курсор рядом с ОСЬЮ стены (не с её видимой гранью — грань
-   *    получится сама из геометрии после разбиения ребра, см.
-   *    splitWallAtPoint), в её пролёте, не у самых торцов. Результат —
-   *    точка на оси; она и станет новым узлом, разбивающим ребро на два
-   *    коллинеарных плюс примыкающее (T-стык).
-   * Побеждает ближайшая по расстоянию цель среди обоих типов.
+   *  - "axis" — курсор целится почти точно в ОСЬ стены (не просто где-то
+   *    рядом с ней), в её пролёте, не у самых торцов — намерение "врезать"
+   *    новую стену в существующую. Результат — точка на оси; она и станет
+   *    новым узлом, разбивающим ребро на два коллинеарных плюс примыкающее
+   *    (T-стык, см. splitWallAtPoint);
+   *  - "face" — курсор рядом с боковой гранью стены (в т.ч. если формально
+   *    находится НАД её телом, но не точно на оси) — результат точка на
+   *    ближайшей грани, со стороны курсора; здесь стена не разбивается,
+   *    новый узел просто ставится рядом, как самостоятельный.
+   * Побеждает ближайшая по расстоянию цель среди всех типов.
    */
   private findWallSnapPx(pos: WallEndpoint): WallSnap | null {
     const snapRadiusPx = this.snapRadiusPx;
+    const axisSnapRadiusPx = this.axisSnapRadiusPx;
     let bestDist = snapRadiusPx;
     let best: WallSnap | null = null;
 
@@ -822,25 +844,40 @@ export class FloorPlanCanvas {
     }
 
     for (const wall of this.walls.values()) {
-      const { startPx, rotation, lengthPx } = this.segmentGeometryPx(wall);
+      const { startPx, thicknessPx, rotation, lengthPx } = this.segmentGeometryPx(wall);
       const rad = (rotation * Math.PI) / 180;
       const dirX = Math.cos(rad);
       const dirY = Math.sin(rad);
       const perpX = -Math.sin(rad);
       const perpY = Math.cos(rad);
+      const halfPx = thicknessPx / 2;
 
       const t = (pos.x - startPx.x) * dirX + (pos.y - startPx.y) * dirY;
       if (t < snapRadiusPx || t > lengthPx - snapRadiusPx) {
         continue;
       }
-      const axisPoint = { x: startPx.x + dirX * t, y: startPx.y + dirY * t };
-      // Расстояние до точки на оси — тот же перпендикуляр от курсора до
-      // прямой оси (t уже проекция вдоль неё), поэтому совпадает с
-      // Math.hypot(pos - axisPoint) без отдельного вычисления.
-      const dist = Math.abs((pos.x - startPx.x) * perpX + (pos.y - startPx.y) * perpY);
-      if (dist <= bestDist) {
-        bestDist = dist;
-        best = { kind: 'axis', point: axisPoint, wallId: wall.id };
+
+      const distPerp = (pos.x - startPx.x) * perpX + (pos.y - startPx.y) * perpY;
+
+      if (Math.abs(distPerp) <= axisSnapRadiusPx) {
+        const axisPoint = { x: startPx.x + dirX * t, y: startPx.y + dirY * t };
+        const dist = Math.abs(distPerp);
+        if (dist <= bestDist) {
+          bestDist = dist;
+          best = { kind: 'axis', point: axisPoint, wallId: wall.id };
+        }
+        continue;
+      }
+
+      const faceSign = distPerp >= 0 ? 1 : -1;
+      const facePoint = {
+        x: startPx.x + dirX * t + perpX * halfPx * faceSign,
+        y: startPx.y + dirY * t + perpY * halfPx * faceSign,
+      };
+      const faceDist = Math.hypot(pos.x - facePoint.x, pos.y - facePoint.y);
+      if (faceDist <= bestDist) {
+        bestDist = faceDist;
+        best = { kind: 'face', point: facePoint };
       }
     }
 
@@ -914,12 +951,19 @@ export class FloorPlanCanvas {
 
   /**
    * Итоговые длина/угол/тип примыкания для конца рисуемой стены: сначала
-   * примагничивание к узлу/грани соседней стены (или угловая магнитность к
-   * направляющим, если рядом ничего нет), затем — проверка, не проходит ли
-   * получившийся отрезок СКВОЗЬ другую стену раньше своего конца; если да,
-   * длина обрезается до этой стены, и она сама становится новой точкой
+   * примагничивание к узлу/оси/грани соседней стены (или угловая магнитность
+   * к направляющим, если рядом ничего нет), затем — проверка, не проходит
+   * ли получившийся отрезок СКВОЗЬ другую стену раньше своего конца; если
+   * да, длина обрезается до этой стены, и она сама становится новой точкой
    * примыкания. Используется и в превью (handleWallDrawMove), и в финальном
    * результате — расчёт один и тот же, чтобы стена не "прыгала" при отпускании.
+   *
+   * Исключение — курсор ТОЧНО целится в ось существующей стены (T-примыкание,
+   * см. findWallSnapPx): это осознанное намерение довести стену до центра
+   * чужого тела, а не случайное прохождение сквозь него, и столкновение с
+   * БЛИЖНЕЙ гранью той же стены по пути к этой точной цели не должно её
+   * подменять — иначе врезка в середину стены снаружи всегда обрезалась бы
+   * до грани раньше, чем долетала до оси, и T-примыкание стало бы недостижимо.
    */
   private resolveWallEnd(
     start: WallEndpoint,
@@ -943,6 +987,10 @@ export class FloorPlanCanvas {
       lengthPx = geometry.lengthPx;
       angleDeg = geometry.angleDeg;
       snappedGuideDeg = geometry.snappedGuideDeg;
+    }
+
+    if (positionSnap?.kind === 'axis') {
+      return { lengthPx, angleDeg, snap, snappedGuideDeg };
     }
 
     const rad = (angleDeg * Math.PI) / 180;

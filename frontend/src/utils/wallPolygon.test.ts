@@ -7,14 +7,15 @@ function ray(key: string, dir: { x: number; y: number }, halfThickness: number):
 }
 
 describe('computeNodeFaceVertices — вырожденный случай: свободный конец', () => {
-  it('один луч — торец перпендикулярен оси, вершины на гранях без пересечения', () => {
+  it('один луч — "квадратный" торец: центр грани выступает на halfThickness за узел', () => {
     const node = { x: 100, y: 100 };
     const faces = computeNodeFaceVertices(node, [ray('a', { x: 1, y: 0 }, 10)]);
 
     const face = faces.get('a')!;
-    // Направление (1,0): perp = (0,1). left = node+perp*h, right = node-perp*h.
-    expect(face.left).toEqual({ x: 100, y: 110 });
-    expect(face.right).toEqual({ x: 100, y: 90 });
+    // Направление (1,0): capCenter = node - dir*h = (90,100); perp = (0,1).
+    // left = capCenter+perp*h, right = capCenter-perp*h.
+    expect(face.left).toEqual({ x: 90, y: 110 });
+    expect(face.right).toEqual({ x: 90, y: 90 });
   });
 });
 
@@ -168,7 +169,8 @@ describe('computeNodeFaceVertices — вырожденный случай: тр�
 
 describe('buildSegmentPolygon', () => {
   it('собирает четырёхугольник рядового ребра в порядке обхода без самопересечений', () => {
-    // Прямая стена без стыков (два свободных конца) — обычный прямоугольник.
+    // Прямая стена без стыков (два свободных конца) — прямоугольник,
+    // выступающий на halfThickness (10) за оба узла — квадратный торец.
     const startNode = { x: 0, y: 0 };
     const endNode = { x: 100, y: 0 };
     const startFaces = computeNodeFaceVertices(startNode, [ray('s', { x: 1, y: 0 }, 10)]);
@@ -177,10 +179,10 @@ describe('buildSegmentPolygon', () => {
     const polygon = buildSegmentPolygon(startFaces.get('s')!, endFaces.get('s')!);
 
     expect(polygon).toEqual([
-      { x: 0, y: 10 },
-      { x: 100, y: 10 },
-      { x: 100, y: -10 },
-      { x: 0, y: -10 },
+      { x: -10, y: 10 },
+      { x: 110, y: 10 },
+      { x: 110, y: -10 },
+      { x: -10, y: -10 },
     ]);
   });
 });

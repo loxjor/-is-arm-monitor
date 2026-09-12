@@ -100,8 +100,10 @@ function wedgeVertices(node: WallEndpoint, rayA: NodeRay, rayB: NodeRay): [WallE
  * заново из текущей геометрии, а не накопленное состояние (ср. удалённый
  * rebuildJoints/setStartExtension). Вырожденные случаи:
  *  - ноль лучей — пустой результат;
- *  - один луч (свободный конец) — торец перпендикулярен оси, вершины
- *    прямо на гранях, пересекать не с кем;
+ *  - один луч (свободный конец) — "квадратный" торец (как stroke-linecap:
+ *    square): точка выступает на halfThickness НАРУЖУ, в сторону,
+ *    противоположную направлению луча, и уже от неё берутся обе вершины
+ *    по перпендикуляру — а не плоский срез ровно по узлу;
  *  - два и более лучей — сортируем по углу вокруг узла и для каждой пары
  *    угловых соседей (по кругу, включая пару "последний-первый") считаем
  *    одну вершину через wedgeVertices; у ребра с N соседями получается
@@ -119,11 +121,21 @@ export function computeNodeFaceVertices(
   }
 
   if (rays.length === 1) {
+    // "Квадратный" торец: центр грани выступает на halfThickness за узел, в
+    // сторону, ОБРАТНУЮ направлению луча (луч смотрит от узла В сторону
+    // ребра, наружу — противоположное направление). Без этого выступа
+    // свободный конец стены при рисовании визуально "терял" ту половину
+    // площади призрака (wallGhost), что показывалась позади точки старта
+    // ещё до первого движения мыши.
     const ray = rays[0];
     const perp = rotate90(ray.dir);
+    const capCenter: WallEndpoint = {
+      x: node.x - ray.dir.x * ray.halfThickness,
+      y: node.y - ray.dir.y * ray.halfThickness,
+    };
     result.set(ray.key, {
-      left: { x: node.x + perp.x * ray.halfThickness, y: node.y + perp.y * ray.halfThickness },
-      right: { x: node.x - perp.x * ray.halfThickness, y: node.y - perp.y * ray.halfThickness },
+      left: { x: capCenter.x + perp.x * ray.halfThickness, y: capCenter.y + perp.y * ray.halfThickness },
+      right: { x: capCenter.x - perp.x * ray.halfThickness, y: capCenter.y - perp.y * ray.halfThickness },
     });
     return result;
   }
