@@ -6,7 +6,8 @@
 
 export type WallEndpoint = { x: number; y: number };
 
-const GUIDE_SNAP_TOLERANCE_DEG = 5;
+/** Четыре направляющие линии магнетизма угла — 0° и 180° (и т.д.) одна и та же прямая. */
+export const GUIDE_LINE_ANGLES_DEG = [0, 45, 90, 135];
 
 /** Разница углов a-b, приведённая к диапазону (-180, 180]. */
 export function angleDiffDeg(a: number, b: number): number {
@@ -55,11 +56,40 @@ export function intersectRaySegment(
   return { t, point: { x: origin.x + dirX * t, y: origin.y + dirY * t } };
 }
 
-/** Ближайшая к angleDeg направляющая линия из [0, 45, 90, 135] (0..135), либо null. */
-export function findSnappedGuideLineDeg(angleDeg: number): number | null {
-  const nearestMultiple = Math.round(angleDeg / 45) * 45;
-  if (Math.abs(angleDiffDeg(angleDeg, nearestMultiple)) > GUIDE_SNAP_TOLERANCE_DEG) {
-    return null;
+/**
+ * Направляющая линия из GUIDE_LINE_ANGLES_DEG, к которой примагничивается
+ * вектор (dx, dy) от точки начала стены, — по ПЕРПЕНДИКУЛЯРНОМУ РАССТОЯНИЮ
+ * от курсора до линии, а не по разнице углов. Угловой допуск на длинной
+ * стене давал огромное отклонение в единицах длины (5° на отрезке в 1000
+ * единиц — это уже ~87 единиц бокового смещения), а допуск, заданный
+ * расстоянием, от длины стены не зависит: стена 100 с отклонением 4
+ * примагнитится, стена 550 с отклонением 7 — нет, хотя её угловое
+ * отклонение (0.73°) вчетверо меньше, чем у первой (2.29°) (проверено в
+ * geometry.test.ts на числах из эталона). toleranceDistance — порог в тех
+ * же единицах, что dx/dy (домен вызывающего кода — обычно px).
+ *
+ * Каждая из четырёх линий проходит через начало вектора (dx, dy) — то есть
+ * через точку старта стены — и не привязана к направлению (0° и 180° это
+ * одна и та же прямая), поэтому расстояние считается до прямой, а не до
+ * луча: |dx·sin(θ) − dy·cos(θ)| — стандартная формула расстояния от точки
+ * до прямой, заданной направлением (cos θ, sin θ) через начало координат.
+ */
+export function findSnappedGuideLineDeg(
+  dx: number,
+  dy: number,
+  toleranceDistance: number,
+): number | null {
+  let bestAngle: number | null = null;
+  let bestDist = toleranceDistance;
+
+  for (const angleDeg of GUIDE_LINE_ANGLES_DEG) {
+    const rad = (angleDeg * Math.PI) / 180;
+    const dist = Math.abs(dx * Math.sin(rad) - dy * Math.cos(rad));
+    if (dist <= bestDist) {
+      bestDist = dist;
+      bestAngle = angleDeg;
+    }
   }
-  return ((nearestMultiple % 180) + 180) % 180;
+
+  return bestAngle;
 }

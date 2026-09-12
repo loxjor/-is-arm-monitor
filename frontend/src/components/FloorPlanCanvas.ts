@@ -10,7 +10,13 @@ import { generateId } from '../utils/id';
 import { cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 import { GRID_MAJOR_EVERY, GRID_MINOR_SPACING_PX, getGridTilePattern } from '../utils/grid';
-import { type WallEndpoint, findSnappedGuideLineDeg, intersectRaySegment } from '../utils/geometry';
+import {
+  type WallEndpoint,
+  GUIDE_LINE_ANGLES_DEG,
+  angleDiffDeg,
+  findSnappedGuideLineDeg,
+  intersectRaySegment,
+} from '../utils/geometry';
 
 export type CanvasMode = 'select' | 'draw-wall';
 
@@ -21,10 +27,17 @@ const MAX_WALL_THICKNESS_CM = 60;
 const DIMENSION_LABEL_GAP_PX = 14;
 
 // Направляющие "векторы" от точки начала стены: каждый угол представляет
-// целую линию через точку (0°/180°, 45°/225° и т.д. — одна и та же прямая).
-// Допуск примагничивания к ним (GUIDE_SNAP_TOLERANCE_DEG) — внутри
+// целую линию через точку (0°/180°, 45°/225° и т.д. — одна и та же прямая),
+// см. GUIDE_LINE_ANGLES_DEG в utils/geometry.ts (тот же массив, чтобы
+// отрисовка и магнетизм не могли разойтись).
+//
+// Допуск примагничивания задан РАССТОЯНИЕМ от курсора до направляющей
+// (GUIDE_SNAP_TOLERANCE_CM), а не разницей углов: угловой допуск на длинной
+// стене давал огромное отклонение в сантиметрах (5° на стене в 10 м — это
+// 87 см бокового смещения, стена молча "выпрямлялась" от почти любого
+// нажатия), а допуск в сантиметрах от длины стены не зависит — см.
 // findSnappedGuideLineDeg в utils/geometry.ts.
-const GUIDE_LINE_ANGLES_DEG = [0, 45, 90, 135];
+const GUIDE_SNAP_TOLERANCE_CM = 5;
 const GUIDE_LINE_LENGTH_PX = 4000;
 const GUIDE_HIGHLIGHT_RADIUS_PX = 40;
 
@@ -1316,9 +1329,11 @@ export class FloorPlanCanvas {
 
   /**
    * Длина (px) и угол линии от start до pos. Если курсор попадает в допуск
-   * GUIDE_SNAP_TOLERANCE_DEG вокруг одной из направляющих (0/45/90/135°),
-   * угол магнитится к ней — как обычная угловая привязка в CAD-инструментах.
-   * Зажатый Shift отключает магнетизм для действительно свободного угла.
+   * GUIDE_SNAP_TOLERANCE_CM (по перпендикулярному расстоянию до направляющей,
+   * не по углу — см. findSnappedGuideLineDeg) от одной из направляющих
+   * (0/45/90/135°), угол магнитится к ней — как обычная угловая привязка в
+   * CAD-инструментах. Зажатый Shift отключает магнетизм для действительно
+   * свободного угла.
    */
   private computeWallGeometryPx(
     start: { x: number; y: number },
@@ -1333,10 +1348,20 @@ export class FloorPlanCanvas {
 
     const nativeEvent = event.evt as MouseEvent;
     const magnetismEnabled = !nativeEvent.shiftKey;
-    const snappedGuideDeg = magnetismEnabled ? findSnappedGuideLineDeg(rawAngleDeg) : null;
+    const snappedGuideDeg = magnetismEnabled
+      ? findSnappedGuideLineDeg(dx, dy, cmToPx(GUIDE_SNAP_TOLERANCE_CM))
+      : null;
 
     if (snappedGuideDeg !== null) {
-      angleDeg = Math.round(rawAngleDeg / 45) * 45;
+      // Направляющая — это ПРЯМАЯ (0° и 180° одна и та же линия), стена
+      // должна указывать туда, где сейчас курсор, — берём то из двух
+      // противоположных направлений этой линии, что ближе к исходному углу.
+      const opposite = snappedGuideDeg + 180;
+      angleDeg =
+        Math.abs(angleDiffDeg(rawAngleDeg, snappedGuideDeg)) <=
+        Math.abs(angleDiffDeg(rawAngleDeg, opposite))
+          ? snappedGuideDeg
+          : opposite;
       // Проецируем вектор мыши на выбранное направление, иначе длина стены
       // будет завышена на величину бокового отклонения курсора.
       const angleRad = (angleDeg * Math.PI) / 180;

@@ -80,28 +80,47 @@ describe('intersectRaySegment', () => {
   });
 });
 
-describe('findSnappedGuideLineDeg', () => {
-  it('snaps an angle close to 0 degrees', () => {
-    expect(findSnappedGuideLineDeg(2)).toBe(0);
+describe('findSnappedGuideLineDeg (Этап 5.5 — допуск по расстоянию, не по углу)', () => {
+  const TOLERANCE = 5;
+
+  it('snaps when the perpendicular distance to the 0° line is within tolerance', () => {
+    expect(findSnappedGuideLineDeg(100, 2, TOLERANCE)).toBe(0);
   });
 
-  it('snaps an angle close to 45 degrees', () => {
-    expect(findSnappedGuideLineDeg(43)).toBe(45);
+  it('snaps exactly at the tolerance boundary', () => {
+    expect(findSnappedGuideLineDeg(100, 5, TOLERANCE)).toBe(0);
   });
 
-  it('snaps exactly at the tolerance boundary (5 degrees)', () => {
-    expect(findSnappedGuideLineDeg(5)).toBe(0);
+  it('does not snap just outside the tolerance', () => {
+    expect(findSnappedGuideLineDeg(100, 5.01, TOLERANCE)).toBeNull();
   });
 
-  it('returns null when outside the tolerance', () => {
-    expect(findSnappedGuideLineDeg(20)).toBeNull();
+  it('snaps to the 45° line when close to it', () => {
+    const rad45 = Math.PI / 4;
+    const perp = { x: -Math.sin(rad45), y: Math.cos(rad45) };
+    const dx = 100 + perp.x * 3;
+    const dy = 100 + perp.y * 3;
+    expect(findSnappedGuideLineDeg(dx, dy, TOLERANCE)).toBe(45);
   });
 
-  it('snaps a negative angle close to -135 degrees onto the same line as 45', () => {
-    expect(findSnappedGuideLineDeg(-133)).toBe(45);
+  it('returns null when far from every guide line', () => {
+    expect(findSnappedGuideLineDeg(100, 30, TOLERANCE)).toBeNull();
   });
 
-  it('normalizes 180 degrees onto the same line as 0', () => {
-    expect(findSnappedGuideLineDeg(180)).toBe(0);
+  it('picks the closest line among several within tolerance', () => {
+    // (1,1) лежит точно на линии 45° (расстояние 0) и всего в 1 от линии 0°.
+    expect(findSnappedGuideLineDeg(1, 1, TOLERANCE)).toBe(45);
+  });
+
+  it('не зависит от направления вектора — работает и для (-dx,-dy) (та же прямая)', () => {
+    expect(findSnappedGuideLineDeg(-100, -2, TOLERANCE)).toBe(0);
+  });
+
+  it('порог не растёт вместе с длиной стены — эталон из TASKS.md: 100/4см примагничивается, 550/7см нет', () => {
+    // Стена 100 см с отклонением 4 см (2.29°) — примагничивается.
+    expect(findSnappedGuideLineDeg(Math.sqrt(100 ** 2 - 4 ** 2), 4, TOLERANCE)).toBe(0);
+    // Стена 550 см с отклонением 7 см (0.73°, вчетверо меньше!) — нет:
+    // порог задан расстоянием (7 > 5), а не углом.
+    expect(findSnappedGuideLineDeg(Math.sqrt(550 ** 2 - 7 ** 2), 7, TOLERANCE)).toBeNull();
   });
 });
