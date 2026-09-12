@@ -60,7 +60,7 @@ const UNDO_STACK_DEPTH = 50;
 
 type WallSnap =
   | { kind: 'corner'; point: WallEndpoint; nodeId: string }
-  | { kind: 'face'; point: WallEndpoint };
+  | { kind: 'axis'; point: WallEndpoint; wallId: string };
 
 /**
  * Обёртка над Konva.Stage: слой фона (план этажа), слой стен (структура
@@ -667,10 +667,11 @@ export class FloorPlanCanvas {
   /**
    * Завершает рисование новой стены: узел на конце, примагниченном к
    * существующему углу (snap.kind === 'corner'), — это ТОТ ЖЕ узел (тот же
-   * id), а не новый с совпадающими координатами; остальные концы получают
-   * свежий узел в точке, где остановилась протяжка. Разделение узла на
-   * стыке — задача Этапа 5.4, здесь face-снап просто ставит узел на грани
-   * без "погружения" торца в тело сквозной стены (временный шов до 5.4).
+   * id), а не новый с совпадающими координатами; конец, примагниченный к
+   * оси существующей стены (snap.kind === 'axis'), разбивает эту стену
+   * узлом (см. splitWallAtPoint) — T-стык становится обычным узлом с тремя
+   * рёбрами; остальные концы получают свежий несвязанный узел в точке, где
+   * остановилась протяжка.
    */
   private finishWallDraw(
     startPointPx: WallEndpoint,
@@ -681,9 +682,8 @@ export class FloorPlanCanvas {
   ): Wall {
     this.pushUndoSnapshot();
 
-    const startNodeId =
-      startSnap?.kind === 'corner' ? startSnap.nodeId : this.createNodeAt(startPointPx);
-    const endNodeId = endSnap?.kind === 'corner' ? endSnap.nodeId : this.createNodeAt(endPointPx);
+    const startNodeId = this.resolveDrawEndpointNodeId(startSnap, startPointPx);
+    const endNodeId = this.resolveDrawEndpointNodeId(endSnap, endPointPx);
 
     const wall = this.registerWallSegment({
       id: generateId('wall'),
@@ -694,6 +694,58 @@ export class FloorPlanCanvas {
     this.transformer.moveToTop();
     this.rebuildWallGeometry();
     return wall;
+  }
+
+  /** Узел для одного конца рисуемой стены — см. варианты в finishWallDraw. */
+  private resolveDrawEndpointNodeId(snap: WallSnap | null, pointPx: WallEndpoint): string {
+    if (snap?.kind === 'corner') {
+      return snap.nodeId;
+    }
+    if (snap?.kind === 'axis') {
+      return this.splitWallAtPoint(snap.wallId, snap.point);
+    }
+    return this.createNodeAt(pointPx);
+  }
+
+  /**
+   * T-примыкание: разбивает существующее ребро узлом в точке на его оси —
+   * вместо одного ребра получаются два коллинеарных плюс третье (та новая
+   * стена, чей конец сюда примагнитился). T-стык становится обычным узлом
+   * с тремя рёбрами — никакой отдельной логики "войти в тело стены на
+   * полтолщины" не нужно, T-грань получается сама из вершин угла (см.
+   * utils/wallPolygon.ts, случай "три и более рёбер"). Возвращает id
+   * нового узла.
+   */
+  private splitWallAtPoint(wallId: string, axisPointPx: WallEndpoint): string {
+    const wall = this.walls.get(wallId);
+    if (!wall) {
+      // Стена уже не существует — например, оба конца новой стены попали
+      // на одну и ту же сквозную стену, и первый вызов её уже разбил на
+      // два новых сегмента с другими id. Не падаем: просто ставим обычный
+      // несвязанный узел в этой точке (редкий случай, вручную не тестируется).
+      return this.createNodeAt(axisPointPx);
+    }
+
+    const { startNodeId, endNodeId, thicknessCm } = wall;
+    const newNodeId = this.createNodeAt(axisPointPx);
+
+    wall.line.destroy();
+    this.walls.delete(wallId);
+
+    this.registerWallSegment({
+      id: generateId('wall'),
+      startNodeId,
+      endNodeId: newNodeId,
+      thickness: thicknessCm,
+    });
+    this.registerWallSegment({
+      id: generateId('wall'),
+      startNodeId: newNodeId,
+      endNodeId,
+      thickness: thicknessCm,
+    });
+
+    return newNodeId;
   }
 
   private createNodeAt(pointPx: WallEndpoint): string {
@@ -735,8 +787,11 @@ export class FloorPlanCanvas {
    *    а не к псевдо-углу, выведенному из прямоугольника стены, и есть тот
    *    механизм, который заставляет новую стену РАЗДЕЛИТЬ существующую
    *    вершину, а не создать рядом другую с теми же координатами;
-   *  - "face" — курсор рядом с боковой (длинной) гранью стены, в её
-   *    пролёте, не у самых торцов. Результат — точка ровно на этой грани.
+   *  - "axis" — курсор рядом с ОСЬЮ стены (не с её видимой гранью — грань
+   *    получится сама из геометрии после разбиения ребра, см.
+   *    splitWallAtPoint), в её пролёте, не у самых торцов. Результат —
+   *    точка на оси; она и станет новым узлом, разбивающим ребро на два
+   *    коллинеарных плюс примыкающее (T-стык).
    * Побеждает ближайшая по расстоянию цель среди обоих типов.
    */
   private findWallSnapPx(pos: WallEndpoint): WallSnap | null {
@@ -754,27 +809,25 @@ export class FloorPlanCanvas {
     }
 
     for (const wall of this.walls.values()) {
-      const { startPx, thicknessPx, rotation, lengthPx } = this.segmentGeometryPx(wall);
+      const { startPx, rotation, lengthPx } = this.segmentGeometryPx(wall);
       const rad = (rotation * Math.PI) / 180;
       const dirX = Math.cos(rad);
       const dirY = Math.sin(rad);
       const perpX = -Math.sin(rad);
       const perpY = Math.cos(rad);
-      const halfPx = thicknessPx / 2;
 
       const t = (pos.x - startPx.x) * dirX + (pos.y - startPx.y) * dirY;
-      if (t >= snapRadiusPx && t <= lengthPx - snapRadiusPx) {
-        const distPerp = (pos.x - startPx.x) * perpX + (pos.y - startPx.y) * perpY;
-        const faceSign = distPerp >= 0 ? 1 : -1;
-        const facePoint = {
-          x: startPx.x + dirX * t + perpX * halfPx * faceSign,
-          y: startPx.y + dirY * t + perpY * halfPx * faceSign,
-        };
-        const faceDist = Math.hypot(pos.x - facePoint.x, pos.y - facePoint.y);
-        if (faceDist <= bestDist) {
-          bestDist = faceDist;
-          best = { kind: 'face', point: facePoint };
-        }
+      if (t < snapRadiusPx || t > lengthPx - snapRadiusPx) {
+        continue;
+      }
+      const axisPoint = { x: startPx.x + dirX * t, y: startPx.y + dirY * t };
+      // Расстояние до точки на оси — тот же перпендикуляр от курсора до
+      // прямой оси (t уже проекция вдоль неё), поэтому совпадает с
+      // Math.hypot(pos - axisPoint) без отдельного вычисления.
+      const dist = Math.abs((pos.x - startPx.x) * perpX + (pos.y - startPx.y) * perpY);
+      if (dist <= bestDist) {
+        bestDist = dist;
+        best = { kind: 'axis', point: axisPoint, wallId: wall.id };
       }
     }
 
