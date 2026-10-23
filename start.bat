@@ -38,8 +38,10 @@ start "" "http://localhost:5173/admin.html"
 
 echo.
 echo Готово. Сайт: http://localhost:5173/admin.html
+set "SEED_PW="
+for /f "usebackq tokens=1,* delims==" %%a in ("backend\.env") do if /i "%%a"=="SEED_PASSWORD" set "SEED_PW=%%b"
 echo Логины: admin, sysadmin, head, depthead, employee
-echo Пароль: строка SEED_PASSWORD в backend\.env
+if defined SEED_PW (echo Пароль для всех: %SEED_PW%) else (echo Пароль: в backend\.env не задан SEED_PASSWORD - пароль выводился при первом запуске python -m app.seed)
 echo Чтобы остановить, закройте окна backend и frontend.
 echo.
 pause
