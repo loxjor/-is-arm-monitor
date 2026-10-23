@@ -1,20 +1,25 @@
-"""Демо-данные учётной части: роли, справочники, оборудование.
+"""Демо-данные учётной части: роли, справочники, оборудование, пользователи.
 
-Запуск: `python -m app.seed` (после `alembic upgrade head`). Повторный запуск
-ничего не делает, если роли уже есть. Учётные записи пользователей здесь не
-создаются — для них нужен хеш пароля, он появится на этапе 2 (авторизация).
+Запуск: `python -m app.seed` (после `alembic upgrade head`). Каждая часть
+заполняется, только если её таблицы пусты, поэтому повторный запуск безопасен.
+Пароль демо-пользователей — SEED_PASSWORD из .env; если не задан, генерируется
+и выводится один раз.
 """
 
 from __future__ import annotations
 
+import secrets
 from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.models import (
+    AppUser,
     Building,
     Department,
     Employee,
@@ -38,11 +43,52 @@ ROLES = [
 ]
 
 
-def seed(db: Session) -> None:
-    if db.scalar(select(Role).limit(1)) is not None:
-        print("Данные уже есть — пропуск.")
-        return
+# Логин → (код роли, ФИО сотрудника из демо-данных ниже)
+DEMO_USERS = [
+    ("admin", "admin", "Морозов Илья Павлович"),
+    ("sysadmin", "sysadmin", "Кузнецов Дмитрий Олегович"),
+    ("head", "head", "Петров Сергей Алексеевич"),
+    ("depthead", "dept_head", "Волкова Елена Игоревна"),
+    ("employee", "employee", "Смирнова Анна Викторовна"),
+]
 
+
+def seed(db: Session) -> None:
+    if db.scalar(select(Role).limit(1)) is None:
+        seed_reference_data(db)
+        print("Справочники и оборудование добавлены.")
+    else:
+        print("Справочники уже есть — пропуск.")
+
+    if db.scalar(select(AppUser).limit(1)) is None:
+        seed_users(db)
+    else:
+        print("Пользователи уже есть — пропуск.")
+
+
+def seed_users(db: Session) -> None:
+    password = settings.SEED_PASSWORD or secrets.token_urlsafe(9)
+    password_hash = hash_password(password)
+    roles = {role.code: role for role in db.scalars(select(Role))}
+    employees = {e.full_name: e for e in db.scalars(select(Employee))}
+    for login, role_code, full_name in DEMO_USERS:
+        db.add(
+            AppUser(
+                login=login,
+                password_hash=password_hash,
+                role=roles[role_code],
+                employee=employees[full_name],
+                is_active=True,
+            )
+        )
+    db.commit()
+    logins = ", ".join(login for login, _, _ in DEMO_USERS)
+    print(f"Пользователи добавлены: {logins}.")
+    if settings.SEED_PASSWORD is None:
+        print(f"Сгенерированный пароль для всех: {password}")
+
+
+def seed_reference_data(db: Session) -> None:
     db.add_all(Role(code=c, name=n, description=d) for c, n, d in ROLES)
 
     uit = Department(name="Управление информационных технологий", short_name="УИТ", phone="8-495-000-00-00")
@@ -55,7 +101,7 @@ def seed(db: Session) -> None:
         Employee(full_name="Петров Сергей Алексеевич", position="Начальник отдела", is_mol=True, department=automation),
         Employee(full_name="Смирнова Анна Викторовна", position="Ведущий специалист", is_mol=False, department=automation),
         Employee(full_name="Кузнецов Дмитрий Олегович", position="Главный специалист-эксперт", is_mol=True, department=storage),
-        Employee(full_name="Волкова Елена Игоревна", position="Специалист-эксперт", is_mol=False, department=support),
+        Employee(full_name="Волкова Елена Игоревна", position="Начальник отдела", is_mol=True, department=support),
         Employee(full_name="Морозов Илья Павлович", position="Системный администратор", is_mol=False, department=support),
     ]
     db.add_all(employees)
@@ -155,7 +201,6 @@ def seed(db: Session) -> None:
         )
 
     db.commit()
-    print("Демо-данные добавлены.")
 
 
 if __name__ == "__main__":

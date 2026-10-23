@@ -74,3 +74,6 @@ diplom_program/
 
 - Frontend: `cd frontend && npm install && npm run dev`
 - Backend: `cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload`
+  (нужен `.env` по образцу `.env.example`, `JWT_SECRET` обязателен)
+- БД: `cd backend && alembic upgrade head && python -m app.seed`
+- Тесты backend: `cd backend && pip install -r requirements-dev.txt && pytest`
