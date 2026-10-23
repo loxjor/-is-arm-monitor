@@ -5,9 +5,9 @@ from app.api.deps import get_current_user, require
 from app.core.permissions import Permission
 from app.db.session import get_db
 from app.models import AppUser, EquipmentStatus
-from app.schemas.equipment import EquipmentCard, EquipmentListItem, EquipmentWrite
+from app.schemas.equipment import AssignmentCreate, EquipmentCard, EquipmentListItem, EquipmentWrite
 from app.schemas.page import Page
-from app.services import equipment_service
+from app.services import assignment_service, equipment_service
 from app.services.equipment_service import EquipmentFilters
 from app.services.errors import ConflictError, NotFoundError
 
@@ -25,6 +25,7 @@ def list_equipment(
     os_id: int | None = None,
     dept_id: int | None = None,
     room_id: int | None = None,
+    workplace_id: int | None = None,
     mol_id: int | None = None,
     expiring_within_months: int | None = Query(default=None, ge=0, le=120,
                                                description="Срок службы истекает в ближайшие N месяцев"),
@@ -35,7 +36,8 @@ def list_equipment(
 ):
     filters = EquipmentFilters(
         q=q, status=status_, type_id=type_id, model_id=model_id, os_id=os_id, dept_id=dept_id,
-        room_id=room_id, mol_id=mol_id, expiring_within_months=expiring_within_months,
+        room_id=room_id, workplace_id=workplace_id, mol_id=mol_id,
+        expiring_within_months=expiring_within_months,
     )
     items, total = equipment_service.list_equipment(db, user, filters, limit=limit, offset=offset)
     return Page[EquipmentListItem](items=items, total=total)
@@ -72,6 +74,26 @@ def update(equipment_id: int, data: EquipmentWrite, db: Session = Depends(get_db
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
     try:
         return equipment_service.update(db, user, equipment_id, data)
+    except NotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))
+    except ConflictError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error))
+
+
+@router.post("/{equipment_id}/assignments", response_model=EquipmentCard, status_code=status.HTTP_201_CREATED)
+def assign(
+    equipment_id: int,
+    data: AssignmentCreate,
+    db: Session = Depends(get_db),
+    user: AppUser = Depends(require(Permission.assign_equipment)),
+):
+    """Назначение со склада, перемещение или возврат на склад; ответ — обновлённая карточка."""
+    try:
+        equipment_service.get_card(db, user, equipment_id)
+    except NotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
+    try:
+        return assignment_service.perform(db, user, equipment_id, data)
     except NotFoundError as error:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))
     except ConflictError as error:

@@ -34,7 +34,13 @@ export class EquipmentListScreen implements Screen {
         { title: 'Инв. номер', render: (row) => h('strong', null, row.inventory_no) },
         { title: 'Тип и модель', render: (row) => h('div', null, row.type_name, h('div', { class: 'muted small' }, `${row.manufacturer_name} ${row.model_name}`)) },
         { title: 'Статус', render: (row) => statusBadge(row.status) },
-        { title: 'Размещение', render: (row) => (row.room_no ? `каб. ${row.room_no}, РМ ${dash(row.workplace_no)}` : '—') },
+        {
+          title: 'Размещение',
+          render: (row) => (row.room_no
+            ? h('div', null, `каб. ${row.room_no}, РМ ${dash(row.workplace_no)}`,
+                row.holder_name ? h('div', { class: 'muted small' }, row.holder_name) : null)
+            : '—'),
+        },
         { title: 'МОЛ', render: (row) => dash(row.mol_name) },
         { title: 'ОС', render: (row) => dash(row.os_name) },
         {

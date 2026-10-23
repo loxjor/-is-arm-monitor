@@ -652,3 +652,10 @@ tr.clickable:focus-visible,
     width: 100%;
   }
 }
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}

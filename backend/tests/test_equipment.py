@@ -46,9 +46,11 @@ def test_scope_employee_sees_only_own(client: TestClient) -> None:
     all_items = client.get("/api/v1/equipment", params={"limit": 500}, headers=login(client, "sysadmin")).json()
     own = client.get("/api/v1/equipment", params={"limit": 500}, headers=login(client, "employee")).json()
     assert all_items["total"] == 17
-    # У демо-сотрудника «employee» нет закреплённого оборудования (МОЛ — другие).
-    assert own["total"] == 0
-    hidden_id = all_items["items"][0]["equipment_id"]
+    # Демо-сотруднику «employee» выдано рабочее место 301-1: системный блок и монитор.
+    assert own["total"] == 2
+    assert {i["workplace_no"] for i in own["items"]} == {"301-1"}
+    assert all(i["holder_name"] == "Смирнова Анна Викторовна" for i in own["items"])
+    hidden_id = next(i["equipment_id"] for i in all_items["items"] if i["workplace_no"] != "301-1")
     assert client.get(f"/api/v1/equipment/{hidden_id}", headers=login(client, "employee")).status_code == 404
 
 
@@ -84,7 +86,8 @@ def test_card_and_summary(client: TestClient) -> None:
     card = client.get(f"/api/v1/equipment/{item['equipment_id']}", headers=headers).json()
     assert card["type_name"] == "Системный блок"
     assert card["dept_name"] == "Отдел автоматизации № 1"
-    assert card["assignments"] == []
+    assert [a["operation"] for a in card["assignments"]] == ["assign"]
+    assert card["holder_name"] == "Смирнова Анна Викторовна"
     summary = client.get("/api/v1/equipment/summary", headers=headers).json()
     assert summary == {"in_use": 12, "in_stock": 3, "in_repair": 1, "pending_writeoff": 1}
 

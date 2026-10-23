@@ -1,7 +1,7 @@
 """Реестр оборудования (А1): постановка на учёт, карточка, поиск с фильтрами.
 
-Статус и размещение здесь не меняются — это делают сервисы назначения,
-заявок, инвентаризации и списания (этапы 5–8).
+Статус и размещение здесь не меняются — это делают assignment_service и
+сервисы заявок, инвентаризации и списания (этапы 6–8).
 """
 
 from __future__ import annotations
@@ -10,13 +10,14 @@ import calendar
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, and_, func, or_, select
 from sqlalchemy.orm import Session, aliased, joinedload, selectinload
 
 from app.core.permissions import ROLE_SCOPE, DataScope, RoleCode
 from app.models import (
     AppUser,
     Assignment,
+    AssignmentOperation,
     Employee,
     Equipment,
     EquipmentModel,
@@ -39,8 +40,37 @@ class EquipmentFilters:
     os_id: int | None = None
     dept_id: int | None = None
     room_id: int | None = None
+    workplace_id: int | None = None
     mol_id: int | None = None
     expiring_within_months: int | None = None
+
+
+def current_assignments() -> Select[tuple[Assignment]]:
+    """Последняя запись истории по каждой единице — по ней определяется, кому выдано."""
+    latest = (
+        select(Assignment.equipment_id, func.max(Assignment.assigned_at).label("assigned_at"))
+        .group_by(Assignment.equipment_id)
+        .subquery()
+    )
+    return select(Assignment).join(
+        latest,
+        and_(Assignment.equipment_id == latest.c.equipment_id, Assignment.assigned_at == latest.c.assigned_at),
+    )
+
+
+def _holders(db: Session, equipment_ids: list[int]) -> dict[int, Employee]:
+    if not equipment_ids:
+        return {}
+    rows = db.scalars(
+        current_assignments()
+        .options(joinedload(Assignment.employee))
+        .where(
+            Assignment.equipment_id.in_(equipment_ids),
+            Assignment.operation != AssignmentOperation.return_,
+            Assignment.employee_id.is_not(None),
+        )
+    )
+    return {a.equipment_id: a.employee for a in rows if a.employee is not None}
 
 
 def add_months(value: date, months: int) -> date:
@@ -66,12 +96,20 @@ def _loaded() -> Select[tuple[Equipment]]:
 
 
 def _apply_scope(query: Select[tuple[Equipment]], user: AppUser) -> Select[tuple[Equipment]]:
-    """Сотрудник видит закреплённое за ним, руководитель — своё подразделение (табл. 1.2)."""
+    """Сотрудник видит закреплённое за ним, руководитель — своё подразделение (табл. 1.2).
+
+    «Закреплённое» — где сотрудник МОЛ или кому оборудование выдано последним назначением.
+    """
     scope = ROLE_SCOPE[RoleCode(user.role.code)]
     if scope is DataScope.all:
         return query
     if scope is DataScope.own:
-        return query.where(Equipment.mol_id == user.employee_id)
+        issued = (
+            current_assignments()
+            .where(Assignment.employee_id == user.employee_id, Assignment.operation != AssignmentOperation.return_)
+            .with_only_columns(Assignment.equipment_id)
+        )
+        return query.where(or_(Equipment.mol_id == user.employee_id, Equipment.equipment_id.in_(issued)))
     return _where_department(query, user.employee.dept_id)
 
 
@@ -112,12 +150,14 @@ def _filtered(query: Select[tuple[Equipment]], filters: EquipmentFilters) -> Sel
         query = query.where(
             Equipment.workplace_id.in_(select(Workplace.workplace_id).where(Workplace.room_id == filters.room_id))
         )
+    if filters.workplace_id is not None:
+        query = query.where(Equipment.workplace_id == filters.workplace_id)
     if filters.dept_id is not None:
         query = _where_department(query, filters.dept_id)
     return query
 
 
-def _to_item(equipment: Equipment) -> EquipmentListItem:
+def _to_item(equipment: Equipment, holder: Employee | None) -> EquipmentListItem:
     model = equipment.model
     workplace = equipment.workplace
     return EquipmentListItem(
@@ -139,6 +179,8 @@ def _to_item(equipment: Equipment) -> EquipmentListItem:
         room_no=workplace.room.room_no if workplace else None,
         mol_id=equipment.mol_id,
         mol_name=equipment.mol.full_name if equipment.mol else None,
+        holder_id=holder.employee_id if holder else None,
+        holder_name=holder.full_name if holder else None,
         commissioned_on=equipment.commissioned_on,
         service_end=service_end(equipment),
         book_value=float(equipment.book_value) if equipment.book_value is not None else None,
@@ -152,20 +194,22 @@ def list_equipment(
 
     if filters.expiring_within_months is None:
         total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
-        rows = db.scalars(query.limit(limit).offset(offset)).unique()
-        return [_to_item(e) for e in rows], total
+        page = list(db.scalars(query.limit(limit).offset(offset)).unique())
+    else:
+        # Срок службы = дата ввода + срок типа: арифметика дат в SQL у PostgreSQL и
+        # SQLite разная, а парк — сотни единиц, поэтому фильтр считается в Python.
+        cutoff = add_months(date.today(), filters.expiring_within_months)
+        expiring = [
+            e for e in db.scalars(query).unique()
+            if (end := service_end(e)) is not None and end <= cutoff and e.status is not EquipmentStatus.written_off
+        ]
+        total, page = len(expiring), expiring[offset : offset + limit]
 
-    # Срок службы = дата ввода + срок типа: арифметика дат в SQL у PostgreSQL и
-    # SQLite разная, а парк — сотни единиц, поэтому фильтр считается в Python.
-    cutoff = add_months(date.today(), filters.expiring_within_months)
-    expiring = [
-        e for e in db.scalars(query).unique()
-        if (end := service_end(e)) is not None and end <= cutoff and e.status is not EquipmentStatus.written_off
-    ]
-    return [_to_item(e) for e in expiring[offset : offset + limit]], len(expiring)
+    holders = _holders(db, [e.equipment_id for e in page])
+    return [_to_item(e, holders.get(e.equipment_id)) for e in page], total
 
 
-def _get_visible(db: Session, user: AppUser, equipment_id: int) -> Equipment:
+def get_visible(db: Session, user: AppUser, equipment_id: int) -> Equipment:
     query = _apply_scope(_loaded(), user).where(Equipment.equipment_id == equipment_id)
     equipment = db.scalars(query).unique().one_or_none()
     # Чужое оборудование — 404, а не 403: не подтверждаем, что такой номер есть.
@@ -175,7 +219,7 @@ def _get_visible(db: Session, user: AppUser, equipment_id: int) -> Equipment:
 
 
 def get_card(db: Session, user: AppUser, equipment_id: int) -> EquipmentCard:
-    equipment = _get_visible(db, user, equipment_id)
+    equipment = get_visible(db, user, equipment_id)
     assignments = list(
         db.scalars(
             select(Assignment)
@@ -193,7 +237,7 @@ def get_card(db: Session, user: AppUser, equipment_id: int) -> EquipmentCard:
     }
     workplace = equipment.workplace
     return EquipmentCard(
-        **_to_item(equipment).model_dump(),
+        **_to_item(equipment, _holders(db, [equipment_id]).get(equipment_id)).model_dump(),
         cpu=equipment.cpu,
         ram_gb=equipment.ram_gb,
         storage_gb=equipment.storage_gb,
@@ -250,7 +294,7 @@ def register(db: Session, user: AppUser, data: EquipmentWrite) -> EquipmentCard:
 
 
 def update(db: Session, user: AppUser, equipment_id: int, data: EquipmentWrite) -> EquipmentCard:
-    equipment = _get_visible(db, user, equipment_id)
+    equipment = get_visible(db, user, equipment_id)
     if equipment.status is EquipmentStatus.written_off:
         raise ConflictError("Списанное оборудование не редактируется")
     _check_references(db, data)

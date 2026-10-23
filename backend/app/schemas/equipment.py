@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.enums import AssignmentOperation, EquipmentStatus
 
@@ -51,9 +51,30 @@ class EquipmentListItem(BaseModel):
     room_no: str | None
     mol_id: int | None
     mol_name: str | None
+    holder_id: int | None = Field(description="Сотрудник, которому выдано (последнее назначение)")
+    holder_name: str | None
     commissioned_on: date | None
     service_end: date | None = Field(description="Окончание нормативного срока службы")
     book_value: float | None
+
+
+class AssignmentCreate(BaseModel):
+    """Назначение со склада, перемещение или возврат на склад (BPMN 2.6)."""
+
+    operation: AssignmentOperation
+    workplace_id: int | None = Field(default=None, description="Рабочее место; для перемещения — новое")
+    employee_id: int | None = Field(default=None, description="Сотрудник, которому выдаётся")
+    basis: str | None = Field(default=None, max_length=255, description="Основание: заявка, приказ и т. п.")
+
+    @model_validator(mode="after")
+    def _check_operation(self) -> "AssignmentCreate":
+        if self.operation is AssignmentOperation.assign and self.workplace_id is None:
+            raise ValueError("Для назначения укажите рабочее место")
+        if self.operation is AssignmentOperation.move and self.workplace_id is None and self.employee_id is None:
+            raise ValueError("Для перемещения укажите новое рабочее место или сотрудника")
+        if self.operation is AssignmentOperation.return_ and (self.workplace_id or self.employee_id):
+            raise ValueError("При возврате на склад рабочее место и сотрудник не указываются")
+        return self
 
 
 class AssignmentRead(BaseModel):

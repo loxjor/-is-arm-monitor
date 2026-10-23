@@ -5,6 +5,7 @@ import { OPERATION_LABELS, statusBadge } from '../labels';
 import { DataTable } from '../ui/DataTable';
 import { dash, formatDate, formatMoney, h, type Child } from '../ui/dom';
 import { errorMessage, toast } from '../ui/toast';
+import { openAssignmentForm } from './assignmentForm';
 import { openEquipmentForm } from './equipmentForm';
 import type { RouteContext, Screen } from './Screen';
 
@@ -34,6 +35,22 @@ export class EquipmentCardScreen implements Screen {
     this.title = card.inventory_no;
     document.title = `${card.inventory_no} — АРМ-Монитор`;
     const editable = can('manage_equipment') && card.status !== 'written_off';
+    const onAssigned = (message: string) => (saved: EquipmentCard) => {
+      toast(message);
+      this.render(saved);
+    };
+    const action = (label: string, operation: 'assign' | 'move' | 'return', message: string, primary = false) =>
+      h('button', {
+        type: 'button', class: `btn ${primary ? 'btn--primary' : 'btn--plain'}`,
+        onclick: () => openAssignmentForm(card, operation, onAssigned(message)),
+      }, label);
+    const operations = can('assign_equipment')
+      ? card.status === 'in_stock'
+        ? [action('Назначить на рабочее место', 'assign', 'Оборудование назначено', true)]
+        : card.status === 'in_use'
+          ? [action('Переместить', 'move', 'Перемещение оформлено', true), action('Вернуть на склад', 'return', 'Оборудование возвращено на склад')]
+          : []
+      : [];
 
     const history = new DataTable<AssignmentRecord>(
       [
@@ -54,15 +71,18 @@ export class EquipmentCardScreen implements Screen {
           h('h1', null, card.inventory_no, ' ', statusBadge(card.status)),
           h('p', { class: 'muted' }, `${card.type_name}: ${card.manufacturer_name} ${card.model_name}`),
         ),
-        editable
-          ? h('button', {
-              type: 'button', class: 'btn btn--primary',
-              onclick: () => openEquipmentForm(card, (saved) => {
-                toast('Карточка сохранена');
-                this.render(saved);
-              }),
-            }, 'Изменить')
-          : null,
+        h('div', { class: 'actions' },
+          operations,
+          editable
+            ? h('button', {
+                type: 'button', class: 'btn btn--plain',
+                onclick: () => openEquipmentForm(card, (saved) => {
+                  toast('Карточка сохранена');
+                  this.render(saved);
+                }),
+              }, 'Изменить карточку')
+            : null,
+        ),
       ),
       h('div', { class: 'cards' },
         h('section', { class: 'card' }, h('h2', null, 'Учётные сведения'), facts([
@@ -77,6 +97,7 @@ export class EquipmentCardScreen implements Screen {
           ['Подразделение', dash(card.dept_name)],
           ['Помещение', card.room_no ? `каб. ${card.room_no}` : '—'],
           ['Рабочее место', dash(card.workplace_no)],
+          ['Выдано', dash(card.holder_name)],
           ['Сетевое имя', dash(card.hostname)],
           ['IP-адрес', dash(card.ip_address)],
         ])),

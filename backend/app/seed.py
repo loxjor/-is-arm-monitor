@@ -1,4 +1,4 @@
-"""Демо-данные учётной части: роли, справочники, оборудование, пользователи.
+"""Демо-данные учётной части: роли, справочники, оборудование, пользователи, история назначений.
 
 Запуск: `python -m app.seed` (после `alembic upgrade head`). Каждая часть
 заполняется, только если её таблицы пусты, поэтому повторный запуск безопасен.
@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -20,6 +20,8 @@ from app.core.security import hash_password
 from app.db.session import SessionLocal
 from app.models import (
     AppUser,
+    Assignment,
+    AssignmentOperation,
     Building,
     Department,
     Employee,
@@ -64,6 +66,40 @@ def seed(db: Session) -> None:
         seed_users(db)
     else:
         print("Пользователи уже есть — пропуск.")
+
+    if db.scalar(select(Assignment).limit(1)) is None:
+        seed_history(db)
+    else:
+        print("История назначений уже есть — пропуск.")
+
+
+def seed_history(db: Session) -> None:
+    """Оформляет уже стоящую в эксплуатации технику назначениями — чтобы история не была пустой."""
+    sysadmin = db.scalar(select(AppUser).join(Role).where(Role.code == "sysadmin"))
+    employees = {e.full_name: e for e in db.scalars(select(Employee))}
+    if sysadmin is None:
+        return
+    placed = db.scalars(
+        select(Equipment).where(Equipment.status == EquipmentStatus.in_use, Equipment.workplace_id.is_not(None))
+    )
+    for equipment in placed:
+        workplace = db.get(Workplace, equipment.workplace_id)
+        # Рабочее место 301-1 — демо-сотрудника «employee», остальные — начальника отдела.
+        holder = "Смирнова Анна Викторовна" if workplace and workplace.workplace_no == "301-1" else "Петров Сергей Алексеевич"
+        assigned_on = equipment.commissioned_on or date(2024, 1, 9)
+        db.add(
+            Assignment(
+                equipment_id=equipment.equipment_id,
+                assigned_at=datetime.combine(assigned_on, time(9, 0)),
+                operation=AssignmentOperation.assign,
+                basis="Ввод в эксплуатацию",
+                employee_id=employees[holder].employee_id,
+                workplace_id=equipment.workplace_id,
+                user_id=sysadmin.user_id,
+            )
+        )
+    db.commit()
+    print("История назначений добавлена.")
 
 
 def seed_users(db: Session) -> None:

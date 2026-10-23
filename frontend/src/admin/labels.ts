@@ -28,6 +28,9 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   update: 'Изменение',
   delete: 'Удаление',
   status_change: 'Смена статуса',
+  assign: 'Назначение',
+  move: 'Перемещение',
+  return: 'Возврат на склад',
 };
 
 export const ENTITY_LABELS: Record<string, string> = {

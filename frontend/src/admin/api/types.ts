@@ -69,6 +69,8 @@ export interface EquipmentListItem {
   room_no: string | null;
   mol_id: number | null;
   mol_name: string | null;
+  holder_id: number | null;
+  holder_name: string | null;
   commissioned_on: string | null;
   service_end: string | null;
   book_value: number | null;
