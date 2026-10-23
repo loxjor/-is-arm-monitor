@@ -8,7 +8,6 @@ import { errorMessage, toast } from '../ui/toast';
 import { openAssignmentForm } from './assignmentForm';
 import { openEquipmentForm } from './equipmentForm';
 import type { RouteContext, Screen } from './Screen';
-import { openTicketForm } from './ticketForm';
 
 function facts(rows: [string, Child][]): HTMLElement {
   return h('dl', { class: 'facts' }, rows.flatMap(([term, value]) => [h('dt', null, term), h('dd', null, value)]));
@@ -86,13 +85,7 @@ export class EquipmentCardScreen implements Screen {
         h('div', { class: 'actions' },
           operations,
           can('create_tickets') && card.status !== 'written_off'
-            ? h('button', {
-                type: 'button', class: 'btn btn--plain',
-                onclick: () => openTicketForm(card.equipment_id, (saved) => {
-                  toast(`Заявка № ${saved.ticket_id} подана`);
-                  location.hash = `#/tickets/${saved.ticket_id}`;
-                }),
-              }, 'Подать заявку')
+            ? h('a', { class: 'btn btn--plain', href: `#/tickets/new?equipment=${card.equipment_id}` }, 'Подать заявку')
             : null,
           editable
             ? h('button', {

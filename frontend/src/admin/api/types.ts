@@ -138,3 +138,38 @@ export interface TicketCard extends TicketListItem {
   can_transition_to: TicketStatus[];
   can_add_work: boolean;
 }
+
+export interface PersonBrief {
+  employee_id: number;
+  full_name: string;
+  position: string;
+  phone: string | null;
+  email: string | null;
+}
+
+export interface Territory {
+  workplace_id: number;
+  workplace_no: string;
+  room_no: string;
+  floor: number;
+  building_name: string;
+  building_address: string;
+}
+
+export interface Profile {
+  login: string;
+  role_name: string;
+  person: PersonBrief;
+  is_mol: boolean;
+  department: { dept_id: number; name: string; short_name: string | null; phone: string | null; parent_name: string | null };
+  head: PersonBrief | null;
+  territories: Territory[];
+  equipment: EquipmentListItem[];
+  open_tickets: number;
+}
+
+export interface FloorPlanSummary {
+  id: number;
+  name: string;
+  updated_at: string;
+}

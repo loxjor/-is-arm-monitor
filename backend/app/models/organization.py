@@ -18,12 +18,20 @@ class Department(Base):
     short_name: Mapped[str | None] = mapped_column(String(50))
     phone: Mapped[str | None] = mapped_column(String(20))
     parent_dept_id: Mapped[int | None] = mapped_column(ForeignKey("department.dept_id"))
+    # Руководитель — сверх Т-модели курсового. use_alter: department и employee
+    # ссылаются друг на друга, FK добавляется после создания обеих таблиц.
+    head_employee_id: Mapped[int | None] = mapped_column(
+        ForeignKey("employee.employee_id", use_alter=True, name="fk_department_head_employee_id")
+    )
 
     parent: Mapped["Department | None"] = relationship(
         remote_side="Department.dept_id", back_populates="children"
     )
     children: Mapped[list["Department"]] = relationship(back_populates="parent")
-    employees: Mapped[list["Employee"]] = relationship(back_populates="department")
+    employees: Mapped[list["Employee"]] = relationship(
+        back_populates="department", foreign_keys="Employee.dept_id"
+    )
+    head: Mapped["Employee | None"] = relationship(foreign_keys=[head_employee_id])
 
 
 class Employee(Base):
@@ -37,7 +45,7 @@ class Employee(Base):
     is_mol: Mapped[bool] = mapped_column(Boolean, default=False)
     dept_id: Mapped[int] = mapped_column(ForeignKey("department.dept_id"), index=True)
 
-    department: Mapped["Department"] = relationship(back_populates="employees")
+    department: Mapped["Department"] = relationship(back_populates="employees", foreign_keys=[dept_id])
 
 
 class Building(Base):

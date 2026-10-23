@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.security import hash_password
 from app.db.session import SessionLocal
+from app.schemas.floor_plan import FloorPlanCreate
+from app.services import floor_plan_service
 from app.models import (
     AppUser,
     Assignment,
@@ -29,6 +31,7 @@ from app.models import (
     EquipmentModel,
     EquipmentStatus,
     EquipmentType,
+    FloorPlan,
     Manufacturer,
     OperatingSystem,
     Role,
@@ -81,6 +84,63 @@ def seed(db: Session) -> None:
         seed_tickets(db)
     else:
         print("Заявки уже есть — пропуск.")
+
+    if db.scalar(select(Department).where(Department.head_employee_id.is_not(None)).limit(1)) is None:
+        seed_department_heads(db)
+
+    if db.scalar(select(FloorPlan).limit(1)) is None:
+        seed_floor_plan(db)
+
+
+def seed_floor_plan(db: Session) -> None:
+    """План 3 этажа: кабинеты 301 и 302 с перегородкой и столами по номерам рабочих мест."""
+    occupied = {
+        workplace_no
+        for (workplace_no,) in db.execute(
+            select(Workplace.workplace_no)
+            .join(Equipment, Equipment.workplace_id == Workplace.workplace_id)
+            .where(Equipment.status == EquipmentStatus.in_use)
+        ).tuples()
+    }
+    nodes = {"a": (0, 0), "b": (600, 0), "c": (1100, 0), "d": (1100, 500), "e": (600, 500), "f": (0, 500)}
+    walls = [("a", "b"), ("b", "c"), ("c", "d"), ("d", "e"), ("e", "f"), ("f", "a"), ("b", "e")]
+    desks = {
+        "301-1": (60, 60), "301-2": (240, 60), "301-3": (420, 60),
+        "302-1": (660, 60), "302-2": (840, 60), "302-3": (660, 300),
+    }
+    floor_plan_service.create_floor_plan(
+        db,
+        FloorPlanCreate(
+            name="Главное здание, 3 этаж (каб. 301–302)",
+            width_cm=1200,
+            height_cm=600,
+            nodes=[{"client_id": key, "x": x, "y": y} for key, (x, y) in nodes.items()],
+            segments=[{"start_client_id": a, "end_client_id": b, "thickness": 15} for a, b in walls],
+            workspaces=[
+                {
+                    "x": x, "y": y, "width": 120, "height": 80, "rotation": 0, "label": f"РМ {number}",
+                    "status": "occupied" if number in occupied else "free",
+                }
+                for number, (x, y) in desks.items()
+            ],
+        ),
+    )
+    print("Демо-план этажа добавлен.")
+
+
+def seed_department_heads(db: Session) -> None:
+    heads = {
+        "ОА-1": "Петров Сергей Алексеевич",
+        "ОТП": "Волкова Елена Игоревна",
+        "ОУХ СВТ": "Кузнецов Дмитрий Олегович",
+    }
+    employees = {e.full_name: e for e in db.scalars(select(Employee))}
+    for department in db.scalars(select(Department).where(Department.short_name.in_(heads))):
+        head = employees.get(heads[department.short_name or ""])
+        if head is not None:
+            department.head_employee_id = head.employee_id
+    db.commit()
+    print("Руководители подразделений назначены.")
 
 
 def seed_tickets(db: Session) -> None:

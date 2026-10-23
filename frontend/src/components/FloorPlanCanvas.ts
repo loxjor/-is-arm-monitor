@@ -18,7 +18,9 @@ import {
   intersectRaySegment,
 } from '../utils/geometry';
 
-export type CanvasMode = 'select' | 'draw-wall';
+// 'view' — только просмотр (учётная часть): объекты не выделяются и не
+// двигаются, работают лишь зум и панорамирование.
+export type CanvasMode = 'select' | 'draw-wall' | 'view';
 
 const WALL_DRAW_MIN_LENGTH_CM = 3;
 const DEFAULT_WALL_THICKNESS_CM = 10;
@@ -154,6 +156,7 @@ export class FloorPlanCanvas {
   private guideLines: Konva.Line[] = [];
   private wallSnapIndicator: Konva.Circle | null = null;
   private wallGhost: Konva.Rect | null = null;
+  private readonly resizeObserver: ResizeObserver;
 
   constructor(containerId: string, width: number, height: number) {
     this.stage = new Konva.Stage({
@@ -233,13 +236,13 @@ export class FloorPlanCanvas {
       window.addEventListener('mouseup', this.handlePanEnd);
     });
 
-    const resizeObserver = new ResizeObserver(() => {
+    this.resizeObserver = new ResizeObserver(() => {
       const container = this.stage.container();
       this.stage.width(container.clientWidth);
       this.stage.height(container.clientHeight);
       this.stage.batchDraw();
     });
-    resizeObserver.observe(this.stage.container());
+    this.resizeObserver.observe(this.stage.container());
 
     // Пока рисуем стену, курсор мог уйти за пределы холста без отпускания
     // кнопки (её отпустят уже на window — см. handleWindowPointerUp) —
@@ -490,7 +493,7 @@ export class FloorPlanCanvas {
     // Панорамирование левой кнопкой по пустому месту — только в select:
     // Konva сама не отдаст жест stage, если mousedown пришёлся на объект
     // с собственной draggable=true (тот перетащится сам, а не сцена).
-    this.stage.draggable(mode === 'select');
+    this.stage.draggable(mode === 'select' || mode === 'view');
 
     this.stage.container().style.cursor = mode === 'draw-wall' ? 'crosshair' : 'default';
 
@@ -505,6 +508,16 @@ export class FloorPlanCanvas {
 
   getMode(): CanvasMode {
     return this.mode;
+  }
+
+  /** Снимает слушатели с window и уничтожает сцену — когда холст встроен в экран, который закрывают. */
+  destroy(): void {
+    window.removeEventListener('mouseup', this.handleWindowPointerUp);
+    window.removeEventListener('touchend', this.handleWindowPointerUp);
+    window.removeEventListener('mousemove', this.handlePanMove);
+    window.removeEventListener('mouseup', this.handlePanEnd);
+    this.resizeObserver.disconnect();
+    this.stage.destroy();
   }
 
   loadBackgroundPlan(imageUrl: string): void {

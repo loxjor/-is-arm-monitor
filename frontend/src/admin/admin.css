@@ -693,3 +693,108 @@ tr.clickable:focus-visible,
 .tile--ticket-new { border-left-color: var(--primary); }
 .tile--ticket-in_progress { border-left-color: #d89b1d; }
 .tile--ticket-done { border-left-color: #2e9d55; }
+
+/* ---- Профиль ---- */
+
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.avatar {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-size: 22px;
+  font-weight: 700;
+  flex: none;
+}
+
+.equipment-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.equipment-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  color: var(--text);
+  text-decoration: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.equipment-tile:hover {
+  border-color: #b9c3d1;
+  box-shadow: 0 2px 8px rgba(20, 40, 80, 0.08);
+}
+
+.equipment-tile.selected {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary) inset;
+}
+
+.equipment-tile strong {
+  font-size: 15px;
+}
+
+/* ---- Новая заявка ---- */
+
+.choice-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.choice {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: 999px;
+  padding: 8px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.choice.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.step {
+  margin-bottom: 22px;
+}
+
+.step h2 {
+  margin-bottom: 10px;
+}
+
+.step textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+}
+
+/* ---- Карта ---- */
+
+.map-wrap {
+  height: calc(100vh - 210px);
+  min-height: 360px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}

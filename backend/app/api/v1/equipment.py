@@ -27,6 +27,7 @@ def list_equipment(
     room_id: int | None = None,
     workplace_id: int | None = None,
     mol_id: int | None = None,
+    holder_id: int | None = Query(default=None, description="Выдано сотруднику (последнее назначение)"),
     expiring_within_months: int | None = Query(default=None, ge=0, le=120,
                                                description="Срок службы истекает в ближайшие N месяцев"),
     limit: int = Query(default=50, ge=1, le=500),
@@ -36,7 +37,7 @@ def list_equipment(
 ):
     filters = EquipmentFilters(
         q=q, status=status_, type_id=type_id, model_id=model_id, os_id=os_id, dept_id=dept_id,
-        room_id=room_id, workplace_id=workplace_id, mol_id=mol_id,
+        room_id=room_id, workplace_id=workplace_id, mol_id=mol_id, holder_id=holder_id,
         expiring_within_months=expiring_within_months,
     )
     items, total = equipment_service.list_equipment(db, user, filters, limit=limit, offset=offset)

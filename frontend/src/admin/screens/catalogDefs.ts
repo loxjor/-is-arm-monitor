@@ -31,12 +31,14 @@ export const CATALOG_DEFS: CatalogDef[] = [
       { title: 'Краткое', field: 'short_name' },
       { title: 'Телефон', field: 'phone' },
       { title: 'Вышестоящее', field: 'parent_dept_id', ref: 'departments' },
+      { title: 'Руководитель', field: 'head_employee_id', ref: 'employees' },
     ],
     fields: [
       { name: 'name', label: 'Наименование', kind: 'text', required: true, maxLength: 255 },
       { name: 'short_name', label: 'Краткое наименование', kind: 'text', maxLength: 50 },
       { name: 'phone', label: 'Телефон', kind: 'text', maxLength: 20 },
       select('parent_dept_id', 'Вышестоящее подразделение', 'departments'),
+      select('head_employee_id', 'Руководитель', 'employees'),
     ],
   },
   {

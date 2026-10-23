@@ -22,6 +22,7 @@ class DepartmentCreate(BaseModel):
     short_name: str | None = Field(default=None, max_length=50)
     phone: str | None = Field(default=None, max_length=20)
     parent_dept_id: int | None = Field(default=None, description="Вышестоящее подразделение")
+    head_employee_id: int | None = Field(default=None, description="Руководитель подразделения")
 
 
 class DepartmentRead(_Read, DepartmentCreate):

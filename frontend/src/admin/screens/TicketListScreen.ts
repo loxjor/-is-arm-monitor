@@ -6,7 +6,6 @@ import { DataTable, Pager } from '../ui/DataTable';
 import { dash, formatDate, h } from '../ui/dom';
 import { errorMessage, toast } from '../ui/toast';
 import type { RouteContext, Screen } from './Screen';
-import { openTicketForm } from './ticketForm';
 
 const PAGE_SIZE = 50;
 
@@ -55,15 +54,7 @@ export class TicketListScreen implements Screen {
       null,
       h('div', { class: 'page-head' },
         h('h1', null, this.title),
-        can('create_tickets')
-          ? h('button', {
-              type: 'button', class: 'btn btn--primary',
-              onclick: () => openTicketForm(null, (saved) => {
-                toast(`Заявка № ${saved.ticket_id} подана`);
-                location.hash = `#/tickets/${saved.ticket_id}`;
-              }),
-            }, '+ Новая заявка')
-          : null,
+        can('create_tickets') ? h('a', { class: 'btn btn--primary', href: '#/tickets/new' }, '+ Новая заявка') : null,
       ),
       h('div', { class: 'filters' },
         this.statusSelect, this.typeSelect,

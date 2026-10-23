@@ -42,6 +42,7 @@ class EquipmentFilters:
     room_id: int | None = None
     workplace_id: int | None = None
     mol_id: int | None = None
+    holder_id: int | None = None
     expiring_within_months: int | None = None
 
 
@@ -55,6 +56,15 @@ def current_assignments() -> Select[tuple[Assignment]]:
     return select(Assignment).join(
         latest,
         and_(Assignment.equipment_id == latest.c.equipment_id, Assignment.assigned_at == latest.c.assigned_at),
+    )
+
+
+def _issued_to(employee_id: int) -> Select[tuple[int]]:
+    """Коды оборудования, выданного сотруднику последним назначением."""
+    return (
+        current_assignments()
+        .where(Assignment.employee_id == employee_id, Assignment.operation != AssignmentOperation.return_)
+        .with_only_columns(Assignment.equipment_id)
     )
 
 
@@ -104,12 +114,9 @@ def _apply_scope(query: Select[tuple[Equipment]], user: AppUser) -> Select[tuple
     if scope is DataScope.all:
         return query
     if scope is DataScope.own:
-        issued = (
-            current_assignments()
-            .where(Assignment.employee_id == user.employee_id, Assignment.operation != AssignmentOperation.return_)
-            .with_only_columns(Assignment.equipment_id)
+        return query.where(
+            or_(Equipment.mol_id == user.employee_id, Equipment.equipment_id.in_(_issued_to(user.employee_id)))
         )
-        return query.where(or_(Equipment.mol_id == user.employee_id, Equipment.equipment_id.in_(issued)))
     return _where_department(query, user.employee.dept_id)
 
 
@@ -146,6 +153,8 @@ def _filtered(query: Select[tuple[Equipment]], filters: EquipmentFilters) -> Sel
         query = query.where(Equipment.os_id == filters.os_id)
     if filters.mol_id is not None:
         query = query.where(Equipment.mol_id == filters.mol_id)
+    if filters.holder_id is not None:
+        query = query.where(Equipment.equipment_id.in_(_issued_to(filters.holder_id)))
     if filters.room_id is not None:
         query = query.where(
             Equipment.workplace_id.in_(select(Workplace.workplace_id).where(Workplace.room_id == filters.room_id))

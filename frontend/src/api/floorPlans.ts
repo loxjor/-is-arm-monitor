@@ -4,9 +4,9 @@ import type { SceneData } from '../types/scene';
 import { cm } from '../utils/scale';
 import { generateId } from '../utils/id';
 
-// TODO(Этап 4+): вынести в конфигурацию сборки (import.meta.env), когда
-// появится реальное развёртывание с отдельным адресом бэкенда.
-const API_BASE_URL = 'http://localhost:8000/api/v1';
+// Относительный адрес: Vite проксирует /api на бэкенд (vite.config.ts), поэтому
+// карта работает с любого адреса dev-сервера и в учётной части, без CORS.
+const API_BASE_URL = '/api/v1';
 
 const DEFAULT_PLAN_NAME = 'Мой план';
 // Пока во фронтенде нет UI для размера сцены (статичная сетка ±100 м) —
