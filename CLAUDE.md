@@ -72,6 +72,9 @@ diplom_program/
 
 ## Запуск (после установки зависимостей)
 
+- Всё сразу (Windows): `start.bat` в корне — зависимости, `backend/.env` с SQLite
+  при первом запуске, миграции, демо-данные, оба сервера, браузер на `/admin.html`.
+
 - Frontend: `cd frontend && npm install && npm run dev`
 - Backend: `cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload`
   (нужен `.env` по образцу `.env.example`, `JWT_SECRET` обязателен)
