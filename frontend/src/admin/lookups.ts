@@ -52,7 +52,7 @@ export function recordLabel(path: string, record: CatalogRecord): string {
 }
 
 export interface Option {
-  value: number;
+  value: number | string;
   label: string;
 }
 

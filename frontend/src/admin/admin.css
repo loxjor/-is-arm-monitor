@@ -659,3 +659,37 @@ tr.clickable:focus-visible,
   justify-content: flex-end;
   gap: 8px;
 }
+
+.badge--t-new { background: #e6eefb; color: #1f4f99; }
+.badge--t-in_progress { background: #fff3dc; color: #8a5a00; }
+.badge--t-done { background: #e3f4e8; color: #1d6b37; }
+.badge--t-closed { background: #eceef1; color: #5a6575; }
+.badge--t-rejected { background: #fde8e6; color: #a1281f; }
+
+.description {
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.clip {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.tile--ticket-new { border-left-color: var(--primary); }
+.tile--ticket-in_progress { border-left-color: #d89b1d; }
+.tile--ticket-done { border-left-color: #2e9d55; }

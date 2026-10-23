@@ -8,7 +8,10 @@ from sqlalchemy import DateTime, ForeignKey, SmallInteger, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.models.auth import AppUser
 from app.models.enums import TicketPriority, TicketStatus, TicketType, check_enum
+from app.models.equipment import Equipment
+from app.models.organization import Employee
 
 
 class Ticket(Base):
@@ -34,6 +37,9 @@ class Ticket(Base):
     works: Mapped[list["TicketWork"]] = relationship(
         back_populates="ticket", cascade="all, delete-orphan", order_by="TicketWork.work_no"
     )
+    equipment: Mapped["Equipment | None"] = relationship()
+    requester: Mapped["Employee"] = relationship()
+    assignee: Mapped["AppUser | None"] = relationship()
 
 
 class TicketWork(Base):

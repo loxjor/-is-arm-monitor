@@ -103,3 +103,38 @@ export interface AuditLogEntry {
   entity_id: string | null;
   details: string | null;
 }
+
+export type TicketType = 'install' | 'move' | 'service' | 'repair';
+export type TicketPriority = 'low' | 'normal' | 'high';
+export type TicketStatus = 'new' | 'in_progress' | 'done' | 'rejected' | 'closed';
+
+export interface TicketListItem {
+  ticket_id: number;
+  created_at: string;
+  ticket_type: TicketType;
+  description: string;
+  priority: TicketPriority;
+  status: TicketStatus;
+  closed_at: string | null;
+  equipment_id: number | null;
+  inventory_no: string | null;
+  requester_id: number;
+  requester_name: string;
+  assignee_id: number | null;
+  assignee_name: string | null;
+}
+
+export interface TicketWork {
+  work_no: number;
+  performed_at: string;
+  description: string;
+  minutes_spent: number | null;
+  result: string | null;
+  user_login: string;
+}
+
+export interface TicketCard extends TicketListItem {
+  works: TicketWork[];
+  can_transition_to: TicketStatus[];
+  can_add_work: boolean;
+}

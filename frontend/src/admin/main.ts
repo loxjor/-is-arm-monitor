@@ -10,6 +10,8 @@ import { DashboardScreen } from './screens/DashboardScreen';
 import { EquipmentCardScreen } from './screens/EquipmentCardScreen';
 import { EquipmentListScreen } from './screens/EquipmentListScreen';
 import { LoginScreen } from './screens/LoginScreen';
+import { TicketCardScreen } from './screens/TicketCardScreen';
+import { TicketListScreen } from './screens/TicketListScreen';
 import { UsersScreen } from './screens/UsersScreen';
 import type { RouteContext, Screen } from './screens/Screen';
 import { h } from './ui/dom';
@@ -25,6 +27,8 @@ const ROUTES: Route[] = [
   { pattern: /^\/$/, create: () => new DashboardScreen() },
   { pattern: /^\/equipment$/, create: (context) => new EquipmentListScreen(context) },
   { pattern: /^\/equipment\/(\d+)$/, create: (context) => new EquipmentCardScreen(context) },
+  { pattern: /^\/tickets$/, create: (context) => new TicketListScreen(context) },
+  { pattern: /^\/tickets\/(\d+)$/, create: (context) => new TicketCardScreen(context) },
   ...CATALOG_DEFS.map((def) => ({ pattern: new RegExp(`^/catalogs/${def.path}$`), create: () => new CatalogScreen(def) })),
   { pattern: /^\/users$/, permission: 'manage_users', create: () => new UsersScreen() },
   { pattern: /^\/audit-log$/, permission: 'view_audit_log', create: () => new AuditLogScreen() },
@@ -42,6 +46,7 @@ const NAV: { title: string | null; items: NavItem[] }[] = [
     items: [
       { href: '#/', label: 'Главная' },
       { href: '#/equipment', label: 'Реестр оборудования' },
+      { href: '#/tickets', label: 'Заявки' },
     ],
   },
   { title: 'Справочники', items: CATALOG_DEFS.map((def) => ({ href: `#/catalogs/${def.path}`, label: def.title })) },

@@ -1,13 +1,14 @@
 import { api } from '../api/client';
-import type { AssignmentRecord, EquipmentCard } from '../api/types';
+import type { AssignmentRecord, EquipmentCard, Page, TicketListItem } from '../api/types';
 import { can } from '../auth';
-import { OPERATION_LABELS, statusBadge } from '../labels';
+import { OPERATION_LABELS, TICKET_TYPE_LABELS, statusBadge, ticketBadge } from '../labels';
 import { DataTable } from '../ui/DataTable';
 import { dash, formatDate, formatMoney, h, type Child } from '../ui/dom';
 import { errorMessage, toast } from '../ui/toast';
 import { openAssignmentForm } from './assignmentForm';
 import { openEquipmentForm } from './equipmentForm';
 import type { RouteContext, Screen } from './Screen';
+import { openTicketForm } from './ticketForm';
 
 function facts(rows: [string, Child][]): HTMLElement {
   return h('dl', { class: 'facts' }, rows.flatMap(([term, value]) => [h('dt', null, term), h('dd', null, value)]));
@@ -65,6 +66,17 @@ export class EquipmentCardScreen implements Screen {
     );
     history.setRows(card.assignments);
 
+    const tickets = new DataTable<TicketListItem>(
+      [
+        { title: '№', render: (t) => String(t.ticket_id) },
+        { title: 'Создана', render: (t) => formatDate(t.created_at) },
+        { title: 'Тип', render: (t) => TICKET_TYPE_LABELS[t.ticket_type] },
+        { title: 'Описание', render: (t) => h('div', { class: 'clip' }, t.description) },
+        { title: 'Статус', render: (t) => ticketBadge(t.status) },
+      ],
+      { onRowClick: (t) => (location.hash = `#/tickets/${t.ticket_id}`), emptyText: 'Заявок не было' },
+    );
+
     this.content.replaceChildren(
       h('div', { class: 'page-head' },
         h('div', null,
@@ -73,6 +85,15 @@ export class EquipmentCardScreen implements Screen {
         ),
         h('div', { class: 'actions' },
           operations,
+          can('create_tickets') && card.status !== 'written_off'
+            ? h('button', {
+                type: 'button', class: 'btn btn--plain',
+                onclick: () => openTicketForm(card.equipment_id, (saved) => {
+                  toast(`Заявка № ${saved.ticket_id} подана`);
+                  location.hash = `#/tickets/${saved.ticket_id}`;
+                }),
+              }, 'Подать заявку')
+            : null,
           editable
             ? h('button', {
                 type: 'button', class: 'btn btn--plain',
@@ -109,6 +130,18 @@ export class EquipmentCardScreen implements Screen {
         ])),
       ),
       h('section', { class: 'card' }, h('h2', null, 'История назначений и перемещений'), history.element),
+      h('section', { class: 'card' }, h('h2', null, 'Заявки по оборудованию'), tickets.element),
     );
+    void this.loadTickets(card.equipment_id, tickets);
+  }
+
+  private async loadTickets(equipmentId: number, table: DataTable<TicketListItem>): Promise<void> {
+    table.setLoading();
+    try {
+      const page = await api.get<Page<TicketListItem>>('/tickets', { equipment_id: equipmentId, limit: 100 });
+      table.setRows(page.items);
+    } catch {
+      table.setRows([]);
+    }
   }
 }

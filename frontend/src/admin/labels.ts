@@ -1,4 +1,4 @@
-import type { AssignmentRecord, EquipmentStatus } from './api/types';
+import type { AssignmentRecord, EquipmentStatus, TicketPriority, TicketStatus, TicketType } from './api/types';
 import { h } from './ui/dom';
 
 export const STATUS_LABELS: Record<EquipmentStatus, string> = {
@@ -36,6 +36,8 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 export const ENTITY_LABELS: Record<string, string> = {
   app_user: 'Пользователь',
   equipment: 'Оборудование',
+  ticket: 'Заявка',
+  ticket_work: 'Работа по заявке',
   department: 'Подразделение',
   employee: 'Сотрудник',
   building: 'Здание',
@@ -46,3 +48,34 @@ export const ENTITY_LABELS: Record<string, string> = {
   equipment_model: 'Модель',
   operating_system: 'ОС',
 };
+
+export const TICKET_TYPE_LABELS: Record<TicketType, string> = {
+  install: 'Установка',
+  move: 'Перемещение',
+  service: 'Обслуживание',
+  repair: 'Ремонт',
+};
+
+export const TICKET_PRIORITY_LABELS: Record<TicketPriority, string> = {
+  low: 'Низкий',
+  normal: 'Обычный',
+  high: 'Высокий',
+};
+
+export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
+  new: 'Новая',
+  in_progress: 'В работе',
+  done: 'Выполнена',
+  rejected: 'Отклонена',
+  closed: 'Закрыта',
+};
+
+export const TICKET_STATUS_ORDER: TicketStatus[] = ['new', 'in_progress', 'done', 'closed', 'rejected'];
+
+export function ticketBadge(status: TicketStatus): HTMLElement {
+  return h('span', { class: `badge badge--t-${status}` }, TICKET_STATUS_LABELS[status]);
+}
+
+export function priorityMark(priority: TicketPriority): HTMLElement | string {
+  return priority === 'high' ? h('span', { class: 'text-danger' }, '▲ Высокий') : TICKET_PRIORITY_LABELS[priority];
+}

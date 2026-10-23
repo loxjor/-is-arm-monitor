@@ -22,6 +22,7 @@ type Control = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
 
 /**
  * Форма по описанию полей. Значения: пустая строка → null, integer → number,
+ * select → number для числовых ключей и строка для перечислений,
  * decimal → строка (сервер принимает её как Decimal без потерь точности).
  */
 export class Form {
@@ -125,8 +126,11 @@ export class Form {
           valid = false;
         }
         values[field.name] = null;
-      } else if (field.kind === 'integer' || field.kind === 'select') {
+      } else if (field.kind === 'integer') {
         values[field.name] = Number(raw);
+      } else if (field.kind === 'select') {
+        // Ключи справочников — числа, перечисления (тип заявки и т. п.) — строки.
+        values[field.name] = /^\d+$/.test(raw) ? Number(raw) : raw;
       } else {
         values[field.name] = raw;
       }
