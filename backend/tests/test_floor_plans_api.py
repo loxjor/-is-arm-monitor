@@ -1,16 +1,27 @@
 import copy
 from typing import Any
 
+from collections.abc import Iterator
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
+
+from app.api.deps import get_current_user
+from app.main import app
 
 URL = "/api/v1/floor-plans"
 
 
 @pytest.fixture
-def client(empty_client: TestClient) -> TestClient:
-    # Тесты редактора карты рассчитаны на пустую базу, без демо-данных учётной части.
-    return empty_client
+def client(empty_client: TestClient) -> Iterator[TestClient]:
+    # Тесты редактора карты рассчитаны на пустую базу, без демо-данных учётной
+    # части — в ней нет пользователей, поэтому запросы идут от имени фиктивного
+    # администратора ИС (права на карты проверяет test_floor_plan_access.py).
+    admin = SimpleNamespace(user_id=0, is_active=True, role=SimpleNamespace(code="admin"))
+    app.dependency_overrides[get_current_user] = lambda: admin
+    yield empty_client
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 def room_payload() -> dict[str, Any]:

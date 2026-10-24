@@ -7,7 +7,7 @@ import { errorMessage } from '../ui/toast';
 import type { Screen } from './Screen';
 
 export class DashboardScreen implements Screen {
-  readonly title = 'Главная';
+  readonly title = 'Сводка';
   readonly element: HTMLElement;
 
   constructor() {

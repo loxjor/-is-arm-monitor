@@ -174,6 +174,12 @@ function formatValidationHint(detail: unknown): string {
  * пользователя, а detail при 422 вообще не строка (см. formatValidationHint).
  */
 async function buildHttpErrorMessage(response: Response): Promise<string> {
+  if (response.status === 401) {
+    return 'нужно войти в систему';
+  }
+  if (response.status === 403) {
+    return 'недостаточно прав — редактировать планы может только администратор ИС';
+  }
   if (response.status === 404) {
     return 'план не найден на сервере';
   }
@@ -196,9 +202,26 @@ async function buildHttpErrorMessage(response: Response): Promise<string> {
  * заворачиваем в тот же FloorPlanApiError с тем же понятным сообщением,
  * что было раньше жёстко зашито в main.ts.
  */
-async function fetchFloorPlan(url: string, init?: RequestInit): Promise<Response> {
+/**
+ * Токен входа учётной части (admin.html кладёт сессию в localStorage того же
+ * адреса): планы читает любой вошедший, сохраняет — только администратор ИС.
+ */
+export function sessionToken(): string | null {
   try {
-    return await fetch(url, init);
+    const raw = localStorage.getItem('arm-monitor.session');
+    const token: unknown = raw ? (JSON.parse(raw) as { token?: unknown }).token : null;
+    return typeof token === 'string' ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+async function fetchFloorPlan(url: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  const token = sessionToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  try {
+    return await fetch(url, { ...init, headers });
   } catch {
     throw new FloorPlanApiError('сервер недоступен', 0);
   }

@@ -32,8 +32,10 @@ function isPersonalView(): boolean {
 }
 
 const ROUTES: Route[] = [
-  { pattern: /^\/$/, create: () => (isPersonalView() ? new ProfileScreen() : new DashboardScreen()) },
+  // Главная у всех — «Мой профиль»; сводка по парку — отдельная вкладка.
+  { pattern: /^\/$/, create: () => new ProfileScreen() },
   { pattern: /^\/profile$/, create: () => new ProfileScreen() },
+  { pattern: /^\/summary$/, create: () => new DashboardScreen() },
   { pattern: /^\/equipment$/, create: (context) => new EquipmentListScreen(context) },
   { pattern: /^\/equipment\/(\d+)$/, create: (context) => new EquipmentCardScreen(context) },
   { pattern: /^\/tickets$/, create: (context) => new TicketListScreen(context) },
@@ -57,8 +59,8 @@ function navSections(): { title: string | null; items: NavItem[] }[] {
     {
       title: null,
       items: [
-        ...(personal ? [] : [{ href: '#/', label: 'Главная' }]),
         { href: '#/profile', label: 'Мой профиль' },
+        ...(personal ? [] : [{ href: '#/summary', label: 'Сводка' }]),
         { href: '#/equipment', label: personal ? 'Моя техника' : 'Реестр оборудования' },
         { href: '#/tickets', label: personal ? 'Мои заявки' : 'Заявки' },
         { href: '#/tickets/new', label: 'Новая заявка', permission: 'create_tickets' },
@@ -156,7 +158,7 @@ function route(): void {
   document.title = `${screen.title} — АРМ-Монитор`;
 
   // Подсвечивается самый точный пункт: на /tickets/new — «Новая заявка», а не ещё и «Заявки».
-  const effectivePath = path === '/' && isPersonalView() ? '/profile' : path;
+  const effectivePath = path === '/' ? '/profile' : path;
   const matches = (target: string) =>
     target === '/' ? effectivePath === '/' : effectivePath === target || effectivePath.startsWith(`${target}/`);
   const best = navLinks

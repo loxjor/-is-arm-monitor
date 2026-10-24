@@ -27,6 +27,8 @@ class Permission(str, enum.Enum):
     view_reports = "view_reports"
     # Чтение справочников (подразделения, сотрудники, помещения…) — не для рядового сотрудника.
     view_catalogs = "view_catalogs"
+    # Редактор плана этажа (создание и сохранение планов) — только администратор ИС.
+    edit_floor_plans = "edit_floor_plans"
 
 
 class DataScope(str, enum.Enum):
@@ -51,7 +53,9 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
             Permission.prepare_writeoff,
         }
     ),
-    RoleCode.head: frozenset({Permission.approve_writeoff, Permission.view_reports, Permission.view_catalogs}),
+    RoleCode.head: frozenset(
+        {Permission.approve_writeoff, Permission.view_reports, Permission.view_catalogs, Permission.create_tickets}
+    ),
     RoleCode.dept_head: frozenset({Permission.create_tickets, Permission.view_reports, Permission.view_catalogs}),
     RoleCode.employee: frozenset({Permission.create_tickets}),
 }

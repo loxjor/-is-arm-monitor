@@ -8,7 +8,7 @@ import {
 import { cm } from './utils/scale';
 import { generateId } from './utils/id';
 import type { WorkspaceStatus } from './types/workspace';
-import { FloorPlanApiError, listFloorPlans, loadFloorPlan, saveFloorPlan } from './api/floorPlans';
+import { FloorPlanApiError, listFloorPlans, loadFloorPlan, saveFloorPlan, sessionToken } from './api/floorPlans';
 
 // Интерфейс — из ветки workplace-map (верхняя/левая/нижняя панели), движок
 // черчения — FloorPlanCanvas. Холст занимает весь экран, панели поверх него.
@@ -459,22 +459,63 @@ window.addEventListener('keydown', (event) => {
   }
 });
 
+// ─── Доступ: редактор только для администратора ИС ─────────────
+
+/** Закрывает редактор плашкой, если вход не выполнен или роль не та. Сервер проверяет права и сам. */
+async function checkEditorAccess(): Promise<boolean> {
+  const token = sessionToken();
+  let reason = 'Войдите в систему под учётной записью администратора ИС.';
+  if (token) {
+    try {
+      const response = await fetch('/api/v1/auth/me', { headers: { Authorization: `Bearer ${token}` } });
+      if (response.ok) {
+        const user = (await response.json()) as { permissions?: string[] };
+        if (user.permissions?.includes('edit_floor_plans')) return true;
+        reason = 'Редактор плана доступен только администратору ИС. Посмотреть план можно в разделе «Карта этажа».';
+      }
+    } catch {
+      reason = 'Сервер недоступен.';
+    }
+  }
+  const lock = document.createElement('div');
+  lock.className = 'editor-lock';
+  lock.setAttribute('role', 'alertdialog');
+  const box = document.createElement('div');
+  box.className = 'editor-lock-box';
+  const title = document.createElement('h2');
+  title.textContent = 'Нет доступа к редактору';
+  const text = document.createElement('p');
+  text.textContent = reason;
+  const link = document.createElement('a');
+  link.className = 'tool-btn';
+  link.href = '/admin.html';
+  link.textContent = token ? 'Вернуться в АРМ-Монитор' : 'Войти';
+  box.append(title, text, link);
+  lock.append(box);
+  document.body.append(lock);
+  return false;
+}
+
 // ─── Старт ─────────────────────────────────────────────────────
 
-setTool('select');
-rememberPlan(currentFloorPlanId, currentFloorPlanName);
+void checkEditorAccess().then((editorAllowed) => {
+  if (!editorAllowed) return;
 
-// index.html?plan=N — открыть конкретный план сразу (ссылка из учётной части);
-// иначе — последний открытый на этом устройстве, если он ещё есть на сервере.
-const planFromUrl = Number(new URLSearchParams(location.search).get('plan'));
-const planToOpen = Number.isInteger(planFromUrl) && planFromUrl > 0 ? planFromUrl : currentFloorPlanId;
-if (planToOpen !== null) {
-  void listFloorPlans()
-    .then((plans) => {
-      const plan = plans.find((p) => p.id === planToOpen);
-      if (plan) void openPlan(plan.id, plan.name);
-      else if (planToOpen === planFromUrl) showStatus(`План № ${planToOpen} не найден`, true);
-      else rememberPlan(null, null);
-    })
-    .catch(() => showStatus('Сервер недоступен — можно чертить, сохранить не получится', true));
-}
+  setTool('select');
+  rememberPlan(currentFloorPlanId, currentFloorPlanName);
+
+  // index.html?plan=N — открыть конкретный план сразу (ссылка из учётной части);
+  // иначе — последний открытый на этом устройстве, если он ещё есть на сервере.
+  const planFromUrl = Number(new URLSearchParams(location.search).get('plan'));
+  const planToOpen = Number.isInteger(planFromUrl) && planFromUrl > 0 ? planFromUrl : currentFloorPlanId;
+  if (planToOpen !== null) {
+    void listFloorPlans()
+      .then((plans) => {
+        const plan = plans.find((p) => p.id === planToOpen);
+        if (plan) void openPlan(plan.id, plan.name);
+        else if (planToOpen === planFromUrl) showStatus(`План № ${planToOpen} не найден`, true);
+        else rememberPlan(null, null);
+      })
+      .catch(() => showStatus('Сервер недоступен — можно чертить, сохранить не получится', true));
+  }
+});

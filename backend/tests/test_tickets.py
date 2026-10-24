@@ -92,10 +92,10 @@ def test_scope_and_permissions(client: TestClient) -> None:
     assert mine["ticket_id"] in visible and others["ticket_id"] not in visible
     assert client.get(f"/api/v1/tickets/{others['ticket_id']}", headers=employee).status_code == 404
 
-    # Начальник отдела видит всё, но заявки не подаёт и не исполняет.
+    # Начальник отдела видит всё и может подать заявку, но не исполняет их.
     assert client.get(f"/api/v1/tickets/{mine['ticket_id']}", headers=head).status_code == 200
     assert client.post("/api/v1/tickets", json={"ticket_type": "install", "description": "x" * 5},
-                       headers=head).status_code == 403
+                       headers=head).status_code == 201
     assert client.post(f"/api/v1/tickets/{mine['ticket_id']}/transitions", json={"to": "in_progress"},
                        headers=head).status_code == 403
     assert client.post(f"/api/v1/tickets/{mine['ticket_id']}/works", json={"description": "Тест"},

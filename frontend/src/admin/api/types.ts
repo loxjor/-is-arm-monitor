@@ -18,7 +18,8 @@ export type Permission =
   | 'prepare_writeoff'
   | 'approve_writeoff'
   | 'view_reports'
-  | 'view_catalogs';
+  | 'view_catalogs'
+  | 'edit_floor_plans';
 
 export type RoleCode = 'admin' | 'sysadmin' | 'head' | 'dept_head' | 'employee';
 

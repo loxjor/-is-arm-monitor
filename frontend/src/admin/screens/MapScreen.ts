@@ -33,7 +33,7 @@ export class MapScreen implements Screen {
           h('h1', null, this.title),
           h('p', { class: 'muted' }, 'Колесо мыши — масштаб, перетаскивание — перемещение по плану.'),
         ),
-        can('manage_catalogs') ? this.editorLink : null,
+        can('edit_floor_plans') ? this.editorLink : null,
       ),
       h('div', { class: 'filters' }, this.select, this.status),
       this.container,
