@@ -7,15 +7,63 @@ function ray(key: string, dir: { x: number; y: number }, halfThickness: number):
 }
 
 describe('computeNodeFaceVertices — вырожденный случай: свободный конец', () => {
-  it('один луч — "квадратный" торец: центр грани выступает на halfThickness за узел', () => {
+  it('один луч — плоский торец ровно в узле, без выступа (как у RemPlanner)', () => {
     const node = { x: 100, y: 100 };
     const faces = computeNodeFaceVertices(node, [ray('a', { x: 1, y: 0 }, 10)]);
 
     const face = faces.get('a')!;
-    // Направление (1,0): capCenter = node - dir*h = (90,100); perp = (0,1).
-    // left = capCenter+perp*h, right = capCenter-perp*h.
-    expect(face.left).toEqual({ x: 90, y: 110 });
-    expect(face.right).toEqual({ x: 90, y: 90 });
+    // Направление (1,0), perp = (0,1): вершины торца лежат на перпендикуляре к
+    // оси, проходящем через сам узел.
+    expect(face.left).toEqual({ x: 100, y: 110 });
+    expect(face.right).toEqual({ x: 100, y: 90 });
+  });
+
+  it('торец перпендикулярен оси при любом направлении стены', () => {
+    const node = { x: 0, y: 0 };
+    const face = computeNodeFaceVertices(node, [ray('a', { x: 3, y: 4 }, 5)]).get('a')!;
+    // Ось (0.6, 0.8): торец — отрезок длиной 10, перпендикулярный оси, середина в узле.
+    expect((face.left.x + face.right.x) / 2).toBeCloseTo(0);
+    expect((face.left.y + face.right.y) / 2).toBeCloseTo(0);
+    expect(Math.hypot(face.left.x - face.right.x, face.left.y - face.right.y)).toBeCloseTo(10);
+    const along = (face.left.x - face.right.x) * 0.6 + (face.left.y - face.right.y) * 0.8;
+    expect(along).toBeCloseTo(0);
+  });
+});
+
+describe('computeNodeFaceVertices — свободный конец упирается в грань другой стены', () => {
+  it('перпендикулярно — торец ровно по грани, без выступа', () => {
+    // Стена идёт вверх (−y) от узла (100,100), лежащего на грани y=100 горизонтальной стены.
+    const node = { x: 100, y: 100 };
+    const faces = computeNodeFaceVertices(node, [ray('a', { x: 0, y: -1 }, 5)], {
+      point: { x: 0, y: 100 },
+      dir: { x: 1, y: 0 },
+    });
+    const face = faces.get('a')!;
+    expect(face.left.y).toBeCloseTo(100);
+    expect(face.right.y).toBeCloseTo(100);
+    expect(Math.abs(face.left.x - face.right.x)).toBeCloseTo(10);
+  });
+
+  it('под углом — обе вершины на линии грани, торец скошен', () => {
+    const node = { x: 100, y: 100 };
+    const faces = computeNodeFaceVertices(node, [ray('a', { x: 1, y: -1 }, 5)], {
+      point: { x: 0, y: 100 },
+      dir: { x: 1, y: 0 },
+    });
+    const face = faces.get('a')!;
+    expect(face.left.y).toBeCloseTo(100);
+    expect(face.right.y).toBeCloseTo(100);
+    // Сечение 10 под 45° к грани — по грани оно растягивается до 10·√2.
+    expect(Math.abs(face.left.x - face.right.x)).toBeCloseTo(10 * Math.SQRT2);
+  });
+
+  it('стена параллельна грани — упора нет, обычный плоский торец', () => {
+    const node = { x: 100, y: 100 };
+    const faces = computeNodeFaceVertices(node, [ray('a', { x: 1, y: 0 }, 10)], {
+      point: { x: 0, y: 100 },
+      dir: { x: 1, y: 0 },
+    });
+    expect(faces.get('a')!.left).toEqual({ x: 100, y: 110 });
   });
 });
 
@@ -169,8 +217,8 @@ describe('computeNodeFaceVertices — вырожденный случай: тр�
 
 describe('buildSegmentPolygon', () => {
   it('собирает четырёхугольник рядового ребра в порядке обхода без самопересечений', () => {
-    // Прямая стена без стыков (два свободных конца) — прямоугольник,
-    // выступающий на halfThickness (10) за оба узла — квадратный торец.
+    // Прямая стена без стыков (два свободных конца) — прямоугольник ровно от
+    // узла до узла, торцы не выступают.
     const startNode = { x: 0, y: 0 };
     const endNode = { x: 100, y: 0 };
     const startFaces = computeNodeFaceVertices(startNode, [ray('s', { x: 1, y: 0 }, 10)]);
@@ -179,10 +227,10 @@ describe('buildSegmentPolygon', () => {
     const polygon = buildSegmentPolygon(startFaces.get('s')!, endFaces.get('s')!);
 
     expect(polygon).toEqual([
-      { x: -10, y: 10 },
-      { x: 110, y: 10 },
-      { x: 110, y: -10 },
-      { x: -10, y: -10 },
+      { x: 0, y: 10 },
+      { x: 100, y: 10 },
+      { x: 100, y: -10 },
+      { x: 0, y: -10 },
     ]);
   });
 });

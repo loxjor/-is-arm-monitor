@@ -1,5 +1,5 @@
 import './styles.css';
-import { FloorPlanCanvas } from './components/FloorPlanCanvas';
+import { FloorPlanCanvas, type SelectedWallInfo } from './components/FloorPlanCanvas';
 import { cm } from './utils/scale';
 import type { WorkspaceStatus } from './types/workspace';
 import { FloorPlanApiError, loadFloorPlan, saveFloorPlan } from './api/floorPlans';
@@ -28,6 +28,7 @@ const selectBtn = document.querySelector<HTMLButtonElement>('#btn-select')!;
 const drawWallBtn = document.querySelector<HTMLButtonElement>('#btn-draw-wall')!;
 const planInput = document.querySelector<HTMLInputElement>('#input-plan')!;
 const thicknessInput = document.querySelector<HTMLInputElement>('#input-thickness')!;
+const lengthInput = document.querySelector<HTMLInputElement>('#input-length')!;
 const scaleReadout = document.querySelector<HTMLSpanElement>('#scale-readout')!;
 const resetViewBtn = document.querySelector<HTMLButtonElement>('#btn-reset-view')!;
 const savePlanBtn = document.querySelector<HTMLButtonElement>('#btn-save-plan')!;
@@ -67,7 +68,33 @@ thicknessInput.addEventListener('input', () => {
 });
 
 thicknessInput.addEventListener('change', () => {
-  thicknessInput.value = String(canvas.getWallThickness());
+  thicknessInput.value = String(selectedWall?.thicknessCm ?? canvas.getWallThickness());
+});
+
+// Длину применяем только по change (Enter/уход из поля), а не на каждый
+// input, как толщину: промежуточное "1" при наборе "150" сжало бы стену до
+// минимума и потащило за собой соседей.
+lengthInput.addEventListener('change', () => {
+  const applied = canvas.setSelectedWallLength(Number(lengthInput.value));
+  if (applied === null && selectedWall) {
+    lengthInput.value = String(Math.round(selectedWall.lengthCm));
+  }
+});
+
+let selectedWall: SelectedWallInfo | null = null;
+
+// Поля тулбара показывают выделенную стену; без выделения — толщину, с
+// которой начнётся следующая стена. Поле, в котором сейчас печатают, не
+// трогаем — иначе текст переписывался бы под курсором.
+canvas.setOnSelectionChange((wall) => {
+  selectedWall = wall;
+  lengthInput.disabled = wall === null;
+  if (document.activeElement !== lengthInput) {
+    lengthInput.value = wall ? String(Math.round(wall.lengthCm)) : '';
+  }
+  if (document.activeElement !== thicknessInput) {
+    thicknessInput.value = String(wall?.thicknessCm ?? canvas.getWallThickness());
+  }
 });
 
 planInput.addEventListener('change', () => {

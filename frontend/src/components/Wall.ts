@@ -1,11 +1,16 @@
 import Konva from 'konva';
 import type { WallSegment } from '../types/wall';
-import type { Cm } from '../utils/scale';
+import { pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 import type { WallEndpoint } from '../utils/geometry';
+import { faceDimensions } from '../utils/wallEdit';
+import { DimensionLine } from './DimensionLine';
 
 const WALL_STROKE = '#2b2b2b';
 const WALL_SELECTED_STROKE = '#1976d2';
+// Грань короче сантиметра — это срез острого угла или вырожденный стык,
+// подпись "0" или "1" на ней только засоряет чертёж.
+const MIN_DIMENSION_CM = 1;
 
 /**
  * View одного ребра графа стен (см. types/wall.ts): полигон (Konva.Line,
@@ -23,8 +28,9 @@ const WALL_SELECTED_STROKE = '#1976d2';
  * атрибут ребра, а не производная от узлов величина. Transformer на стены
  * больше не навешивается (полигон с митром нельзя осмысленно тянуть за
  * анкер — растяжение исказило бы уже посчитанные вершины стыков): выбор
- * подсвечивается сменой обводки (setSelected), а толщину меняет поле
- * толщины в тулбаре, когда стена выделена (см. FloorPlanCanvas.setWallThickness).
+ * подсвечивается сменой обводки (setSelected), а толщину меняют поле
+ * толщины в тулбаре (симметрично от оси, см. FloorPlanCanvas.setWallThickness)
+ * и кнопки −/+ у граней (с одной стороны, см. WallControls).
  */
 export class Wall {
   readonly id: string;
@@ -32,8 +38,15 @@ export class Wall {
   readonly startNodeId: string;
   readonly endNodeId: string;
   thicknessCm: Cm;
+  /** Размерные линии по левой и правой грани — лежат в отдельном слое над стенами (см. FloorPlanCanvas). */
+  readonly dimensionGroup = new Konva.Group({ listening: false });
+  private readonly faceDimensionLines = [new DimensionLine(), new DimensionLine()];
+  private polygon: WallEndpoint[] = [];
+  private axisStart: WallEndpoint | null = null;
+  private axisEnd: WallEndpoint | null = null;
 
   constructor(segment: WallSegment, onSelect: (wall: Wall) => void) {
+    this.faceDimensionLines.forEach((dimension) => this.dimensionGroup.add(dimension.group));
     this.id = segment.id;
     this.startNodeId = segment.startNodeId;
     this.endNodeId = segment.endNodeId;
@@ -61,12 +74,42 @@ export class Wall {
    * сам Wall не знает ни про узлы, ни про соседей, только рисует то, что
    * ему передали.
    */
-  render(polygonPoints: readonly WallEndpoint[]): void {
+  render(polygonPoints: readonly WallEndpoint[], axisStart: WallEndpoint, axisEnd: WallEndpoint): void {
     const flat: number[] = [];
     polygonPoints.forEach((point) => {
       flat.push(point.x, point.y);
     });
     this.line.points(flat);
+    this.polygon = [...polygonPoints];
+    this.axisStart = axisStart;
+    this.axisEnd = axisEnd;
+  }
+
+  /** Полигон из последнего render() — по нему ищутся грани для привязки нового старта (см. utils/wallStart.ts). */
+  getPolygon(): readonly WallEndpoint[] {
+    return this.polygon;
+  }
+
+  /**
+   * Размеры по обеим граням из последнего render(). Отдельно от render(),
+   * потому что зависят ещё и от масштаба сцены — при зуме перерисовываются
+   * только они, полигон остаётся прежним.
+   */
+  renderDimensions(scale: number): void {
+    const faces = this.axisStart && this.axisEnd ? faceDimensions(this.polygon, this.axisStart, this.axisEnd) : [];
+    this.faceDimensionLines.forEach((dimension, index) => {
+      const face = faces[index];
+      if (!face || pxToCm(face.length) < MIN_DIMENSION_CM) {
+        dimension.hide();
+        return;
+      }
+      dimension.update(face.from, face.to, face.outward, `${Math.round(pxToCm(face.length))}`, scale);
+    });
+  }
+
+  destroy(): void {
+    this.line.destroy();
+    this.dimensionGroup.destroy();
   }
 
   setDraggable(draggable: boolean): void {

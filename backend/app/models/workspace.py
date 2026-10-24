@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 
-from sqlalchemy import Enum, Float, ForeignKey, String
+from sqlalchemy import CheckConstraint, Enum, Float, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -15,14 +15,25 @@ class WorkspaceStatus(str, enum.Enum):
 
 
 class Workspace(Base):
-    """Рабочее место. x/y/width/height — см, rotation — градусы."""
+    """
+    Рабочее место. x/y/width/height — см, rotation — градусы. client_id —
+    id места на фронтенде, постоянный между сохранениями: по нему PUT
+    обновляет строку на месте, а не пересоздаёт, так что id строки не
+    меняется и на него можно ссылаться (назначения сотрудников, активов).
+    """
 
     __tablename__ = "workspaces"
+    __table_args__ = (
+        UniqueConstraint("floor_plan_id", "client_id", name="uq_workspaces_floor_plan_client_id"),
+        CheckConstraint("width > 0", name="width_positive"),
+        CheckConstraint("height > 0", name="height_positive"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     floor_plan_id: Mapped[int] = mapped_column(
         ForeignKey("floor_plans.id", ondelete="CASCADE"), index=True
     )
+    client_id: Mapped[str] = mapped_column(String(64))
     x: Mapped[float] = mapped_column(Float)
     y: Mapped[float] = mapped_column(Float)
     width: Mapped[float] = mapped_column(Float)

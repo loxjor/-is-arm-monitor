@@ -9,9 +9,10 @@ from app.schemas.floor_plan import (
     FloorPlanUpdate,
 )
 from app.services import floor_plan_service
-from app.services.floor_plan_service import InvalidWallGraphError
 
 router = APIRouter(prefix="/floor-plans", tags=["floor-plans"])
+
+NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"description": "План не найден"}}
 
 
 @router.get("", response_model=list[FloorPlanSummary])
@@ -21,26 +22,20 @@ def list_floor_plans(db: Session = Depends(get_db)):
 
 @router.post("", response_model=FloorPlanRead, status_code=status.HTTP_201_CREATED)
 def create_floor_plan(data: FloorPlanCreate, db: Session = Depends(get_db)):
-    try:
-        return floor_plan_service.create_floor_plan(db, data)
-    except InvalidWallGraphError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))
+    return floor_plan_service.to_read(floor_plan_service.create_floor_plan(db, data))
 
 
-@router.get("/{floor_plan_id}", response_model=FloorPlanRead)
+@router.get("/{floor_plan_id}", response_model=FloorPlanRead, responses=NOT_FOUND)
 def get_floor_plan(floor_plan_id: int, db: Session = Depends(get_db)):
     floor_plan = floor_plan_service.get_floor_plan(db, floor_plan_id)
     if floor_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor plan not found")
-    return floor_plan
+    return floor_plan_service.to_read(floor_plan)
 
 
-@router.put("/{floor_plan_id}", response_model=FloorPlanRead)
+@router.put("/{floor_plan_id}", response_model=FloorPlanRead, responses=NOT_FOUND)
 def update_floor_plan(floor_plan_id: int, data: FloorPlanUpdate, db: Session = Depends(get_db)):
     floor_plan = floor_plan_service.get_floor_plan(db, floor_plan_id)
     if floor_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor plan not found")
-    try:
-        return floor_plan_service.replace_floor_plan(db, floor_plan, data)
-    except InvalidWallGraphError as error:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error))
+    return floor_plan_service.to_read(floor_plan_service.replace_floor_plan(db, floor_plan, data))

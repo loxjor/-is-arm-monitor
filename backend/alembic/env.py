@@ -9,7 +9,7 @@ from alembic import context
 # зарегистрировались в Base.metadata до того, как autogenerate её читает.
 from app.core.config import settings
 from app.db.base import Base
-from app.models import FloorPlan, WallNode, WallSegment, Workspace  # noqa: F401
+from app.models import FloorPlan, Workspace  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -71,7 +71,14 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection,
+            target_metadata=target_metadata,
+            # Без compare_type autogenerate не замечает смену типа колонки
+            # (например, длины String), только добавление/удаление.
+            compare_type=True,
+            # SQLite не умеет ALTER для ограничений — autogenerate должен
+            # сразу писать batch-операции (пересоздание таблицы).
+            render_as_batch=connection.dialect.name == "sqlite",
         )
 
         with context.begin_transaction():

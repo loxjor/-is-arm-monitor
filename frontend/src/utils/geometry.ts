@@ -57,6 +57,64 @@ export function intersectRaySegment(
 }
 
 /**
+ * Синус угла, ниже которого новая стена считается идущей вдоль существующей
+ * (≈10°): такие стены легли бы друг на друга внахлёст на много толщин.
+ */
+const OVERLAP_SIN = Math.sin((10 * Math.PI) / 180);
+
+/**
+ * Где начинается луч новой стены относительно существующей стены
+ * (ось wallStart→wallEnd, полутолщина halfThickness, eps — допуск в тех же
+ * единицах):
+ *  - "inside" — старт внутри тела стены (её узел или точка на оси): эта стена
+ *    не препятствие для новой, их стык — общий узел, его оформит митр;
+ *  - "overlaps" — старт внутри тела, но луч идёт почти вдоль стены в её
+ *    пролёт — новая стена легла бы поверх существующей;
+ *  - "into-face" — старт на боковой грани, а луч смотрит внутрь тела;
+ *  - "outside" — старт вне тела (или на грани, луч наружу): обычная проверка
+ *    столкновений.
+ */
+export type RayStartRelation = 'inside' | 'overlaps' | 'into-face' | 'outside';
+
+export function rayStartRelation(
+  start: WallEndpoint,
+  dir: WallEndpoint,
+  wallStart: WallEndpoint,
+  wallEnd: WallEndpoint,
+  halfThickness: number,
+  eps: number,
+): RayStartRelation {
+  const length = Math.hypot(wallEnd.x - wallStart.x, wallEnd.y - wallStart.y);
+  if (length === 0) {
+    return 'outside';
+  }
+  const ux = (wallEnd.x - wallStart.x) / length;
+  const uy = (wallEnd.y - wallStart.y) / length;
+  const relX = start.x - wallStart.x;
+  const relY = start.y - wallStart.y;
+  const t = relX * ux + relY * uy;
+  const d = relX * -uy + relY * ux;
+  if (t < -eps || t > length + eps) {
+    return 'outside';
+  }
+
+  const along = dir.x * ux + dir.y * uy;
+  const across = dir.x * -uy + dir.y * ux;
+
+  if (Math.abs(d) < halfThickness - eps) {
+    const intoSpan =
+      (t > eps && t < length - eps) || (t <= eps && along > 0) || (t >= length - eps && along < 0);
+    return intoSpan && Math.abs(across) < OVERLAP_SIN ? 'overlaps' : 'inside';
+  }
+
+  const onFace = Math.abs(Math.abs(d) - halfThickness) <= eps && t > eps && t < length - eps;
+  if (onFace && across * Math.sign(d) < 0) {
+    return 'into-face';
+  }
+  return 'outside';
+}
+
+/**
  * Направляющая линия из GUIDE_LINE_ANGLES_DEG, к которой примагничивается
  * вектор (dx, dy) от точки начала стены, — по ПЕРПЕНДИКУЛЯРНОМУ РАССТОЯНИЮ
  * от курсора до линии, а не по разнице углов. Угловой допуск на длинной

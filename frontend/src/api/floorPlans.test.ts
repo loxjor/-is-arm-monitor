@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FloorPlanApiError, loadFloorPlan, saveFloorPlan } from './floorPlans';
 import type { SceneData } from '../types/scene';
+import { cm } from '../utils/scale';
 
 const emptyScene: SceneData = { version: 2, nodes: [], segments: [], workspaces: [] };
 
@@ -87,8 +88,7 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
           background_image_url: null,
           created_at: '2026-01-01T00:00:00Z',
           updated_at: '2026-01-01T00:00:00Z',
-          nodes: [],
-          segments: [],
+          scene: { version: 3, nodes: [], segments: [], openings: [] },
           workspaces: [],
         }),
       ),
@@ -98,8 +98,65 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
   });
 });
 
+describe('saveFloorPlan', () => {
+  it('отправляет геометрию документом scene и id рабочих мест как client_id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 7,
+        name: 'Мой план',
+        width_cm: 5000,
+        height_cm: 5000,
+        background_image_url: null,
+        created_at: '2026-01-01T00:00:00Z',
+        updated_at: '2026-01-01T00:00:00Z',
+        scene: { version: 3, nodes: [], segments: [], openings: [] },
+        workspaces: [],
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const scene: SceneData = {
+      version: 2,
+      nodes: [
+        { id: 'node-a', x: cm(0), y: cm(0) },
+        { id: 'node-b', x: cm(100), y: cm(0) },
+      ],
+      segments: [{ id: 'wall-1', startNodeId: 'node-a', endNodeId: 'node-b', thickness: cm(10) }],
+      workspaces: [
+        {
+          id: 'ws-1',
+          x: cm(1),
+          y: cm(2),
+          width: cm(120),
+          height: cm(80),
+          rotation: 0,
+          label: 'Стол',
+          status: 'free',
+        },
+      ],
+    };
+
+    await saveFloorPlan(scene, 7);
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/floor-plans\/7$/);
+    expect(init.method).toBe('PUT');
+    const body = JSON.parse(init.body as string);
+    expect(body.scene).toEqual({
+      version: 2,
+      nodes: [
+        { id: 'node-a', x: 0, y: 0 },
+        { id: 'node-b', x: 100, y: 0 },
+      ],
+      segments: [{ id: 'wall-1', start_node_id: 'node-a', end_node_id: 'node-b', thickness: 10 }],
+    });
+    expect(body.workspaces[0].client_id).toBe('ws-1');
+    expect(body).not.toHaveProperty('nodes');
+  });
+});
+
 describe('loadFloorPlan', () => {
-  it('перекладывает серверные id узлов/сегментов в свежие локальные, сохраняя связи', async () => {
+  it('сохраняет id узлов, сегментов и рабочих мест такими, как их хранит сервер', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -111,12 +168,28 @@ describe('loadFloorPlan', () => {
           background_image_url: null,
           created_at: '2026-01-01T00:00:00Z',
           updated_at: '2026-01-01T00:00:00Z',
-          nodes: [
-            { id: 101, x: 0, y: 0 },
-            { id: 102, x: 100, y: 0 },
+          scene: {
+            version: 3,
+            nodes: [
+              { id: 'node-a', x: 0, y: 0 },
+              { id: 'node-b', x: 100, y: 0 },
+            ],
+            segments: [{ id: 'wall-1', start_node_id: 'node-a', end_node_id: 'node-b', thickness: 10 }],
+            openings: [],
+          },
+          workspaces: [
+            {
+              id: 55,
+              client_id: 'ws-1',
+              x: 1,
+              y: 2,
+              width: 120,
+              height: 80,
+              rotation: 0,
+              label: 'Стол',
+              status: 'free',
+            },
           ],
-          segments: [{ id: 201, start_node_id: 101, end_node_id: 102, thickness: 10 }],
-          workspaces: [],
         }),
       ),
     );
@@ -124,15 +197,11 @@ describe('loadFloorPlan', () => {
     const scene = await loadFloorPlan(7);
 
     expect(scene.version).toBe(2);
-    expect(scene.nodes).toHaveLength(2);
-    expect(scene.segments).toHaveLength(1);
-    // id — свежие локальные (не совпадают с серверными числовыми), но
-    // ссылки сегмента по-прежнему указывают на реальные узлы из массива.
-    const [segment] = scene.segments;
-    const nodeIds = new Set(scene.nodes.map((n) => n.id));
-    expect(nodeIds.has(segment.startNodeId)).toBe(true);
-    expect(nodeIds.has(segment.endNodeId)).toBe(true);
-    expect(segment.startNodeId).not.toBe(segment.endNodeId);
+    expect(scene.nodes.map((n) => n.id)).toEqual(['node-a', 'node-b']);
+    expect(scene.segments).toEqual([
+      { id: 'wall-1', startNodeId: 'node-a', endNodeId: 'node-b', thickness: 10 },
+    ]);
+    expect(scene.workspaces[0].id).toBe('ws-1');
   });
 });
 
