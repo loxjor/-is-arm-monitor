@@ -43,7 +43,8 @@ function translate(item: ValidationItem): string {
     case 'missing':
       return 'обязательное поле';
     case 'string_too_short':
-      return ctx.min_length === 1 ? 'обязательное поле' : `не короче ${String(ctx.min_length)} символов`;
+      // Бэкенд отдаёт значения ctx строками — сравниваем как строку.
+      return String(ctx.min_length) === '1' ? 'обязательное поле' : `не короче ${String(ctx.min_length)} символов`;
     case 'string_too_long':
       return `не длиннее ${String(ctx.max_length)} символов`;
     case 'string_pattern_mismatch':

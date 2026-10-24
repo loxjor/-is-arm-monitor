@@ -67,3 +67,6 @@ def downgrade() -> None:
     op.drop_table('walls')
     op.drop_table('floor_plans')
     # ### end Alembic commands ###
+    # В PostgreSQL enum — отдельный тип, drop_table его не удаляет: без этого
+    # повторный upgrade падает на "type workspace_status already exists".
+    sa.Enum(name='workspace_status').drop(op.get_bind(), checkfirst=True)

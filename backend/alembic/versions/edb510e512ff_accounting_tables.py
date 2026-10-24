@@ -1,7 +1,7 @@
 """accounting tables
 
 Revision ID: edb510e512ff
-Revises: a1c9e6f2b3d4
+Revises: b7e2c4d9f1a3
 Create Date: 2026-10-23 11:56:25.871686
 
 Учётная часть ИС «АРМ-Монитор» (PLAN_ARM.md, этап 1): 18 таблиц Т-модели
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'edb510e512ff'
-down_revision: Union[str, None] = 'a1c9e6f2b3d4'
+down_revision: Union[str, None] = 'b7e2c4d9f1a3'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -65,7 +65,7 @@ def upgrade() -> None:
     sa.Column('name', sa.String(length=50), nullable=False),
     sa.Column('description', sa.Text(), nullable=True),
     sa.PrimaryKeyConstraint('role_id'),
-    sa.UniqueConstraint('code')
+    sa.UniqueConstraint('code', name='uq_role_code')
     )
     op.create_table('employee',
     sa.Column('employee_id', sa.Integer(), nullable=False),
@@ -116,8 +116,8 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['employee_id'], ['employee.employee_id'], ),
     sa.ForeignKeyConstraint(['role_id'], ['role.role_id'], ),
     sa.PrimaryKeyConstraint('user_id'),
-    sa.UniqueConstraint('employee_id'),
-    sa.UniqueConstraint('login')
+    sa.UniqueConstraint('employee_id', name='uq_app_user_employee_id'),
+    sa.UniqueConstraint('login', name='uq_app_user_login')
     )
     op.create_index(op.f('ix_app_user_role_id'), 'app_user', ['role_id'], unique=False)
     op.create_table('workplace',
@@ -164,7 +164,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['os_id'], ['operating_system.os_id'], ),
     sa.ForeignKeyConstraint(['workplace_id'], ['workplace.workplace_id'], ),
     sa.PrimaryKeyConstraint('equipment_id'),
-    sa.UniqueConstraint('inventory_no')
+    sa.UniqueConstraint('inventory_no', name='uq_equipment_inventory_no')
     )
     op.create_index(op.f('ix_equipment_model_id'), 'equipment', ['model_id'], unique=False)
     op.create_index(op.f('ix_equipment_mol_id'), 'equipment', ['mol_id'], unique=False)
@@ -244,7 +244,7 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['equipment_id'], ['equipment.equipment_id'], ),
     sa.ForeignKeyConstraint(['user_id'], ['app_user.user_id'], ),
     sa.PrimaryKeyConstraint('act_id'),
-    sa.UniqueConstraint('equipment_id')
+    sa.UniqueConstraint('equipment_id', name='uq_writeoff_act_equipment_id')
     )
     op.create_index(op.f('ix_writeoff_act_user_id'), 'writeoff_act', ['user_id'], unique=False)
     op.create_table('ticket_work',

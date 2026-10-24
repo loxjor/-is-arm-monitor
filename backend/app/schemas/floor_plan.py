@@ -1,33 +1,43 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.schemas.wall_node import WallNodeCreate, WallNodeRead
-from app.schemas.wall_segment import WallSegmentCreate, WallSegmentRead
+from app.schemas.scene import PositiveSize, SceneRead, SceneWrite
 from app.schemas.workspace import WorkspaceCreate, WorkspaceRead
+
+MAX_WORKSPACES = 2000
 
 
 class FloorPlanBase(BaseModel):
     name: str = Field(max_length=255, description="Название плана")
-    width_cm: float = Field(description="Ширина сцены плана, см")
-    height_cm: float = Field(description="Высота сцены плана, см")
+    width_cm: PositiveSize = Field(description="Ширина сцены плана, см")
+    height_cm: PositiveSize = Field(description="Высота сцены плана, см")
     background_image_url: str | None = Field(
         default=None, max_length=2048, description="URL фонового изображения плана"
     )
 
 
 class FloorPlanCreate(FloorPlanBase):
-    nodes: list[WallNodeCreate] = Field(default_factory=list)
-    segments: list[WallSegmentCreate] = Field(default_factory=list)
-    workspaces: list[WorkspaceCreate] = Field(default_factory=list)
+    scene: SceneWrite
+    workspaces: list[WorkspaceCreate] = Field(default_factory=list, max_length=MAX_WORKSPACES)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def unique_workspace_ids(self) -> "FloorPlanCreate":
+        seen: set[str] = set()
+        for workspace in self.workspaces:
+            if workspace.client_id in seen:
+                raise ValueError(f"повторяющийся client_id рабочего места: {workspace.client_id!r}")
+            seen.add(workspace.client_id)
+        return self
 
 
 class FloorPlanUpdate(FloorPlanCreate):
     """
-    Тот же формат, что Create: PUT заменяет содержимое плана целиком
-    (стены и рабочие места пересоздаются из присланных массивов) — для
-    чертежа это надёжнее поштучных CRUD-операций и снимает вопрос
-    синхронизации между клиентом и сервером.
+    Тот же формат, что Create: PUT заменяет план целиком. Сцена (стены,
+    проёмы) перезаписывается документом, рабочие места сверяются по
+    client_id — существующие обновляются на месте, отсутствующие удаляются.
     """
 
 
@@ -35,15 +45,12 @@ class FloorPlanRead(FloorPlanBase):
     id: int
     created_at: datetime
     updated_at: datetime
-    nodes: list[WallNodeRead]
-    segments: list[WallSegmentRead]
+    scene: SceneRead
     workspaces: list[WorkspaceRead]
-
-    model_config = ConfigDict(from_attributes=True)
 
 
 class FloorPlanSummary(FloorPlanBase):
-    """Краткая карточка плана для списка — без вложенных стен/рабочих мест."""
+    """Краткая карточка плана для списка — без сцены и рабочих мест."""
 
     id: int
     created_at: datetime

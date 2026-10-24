@@ -2,7 +2,6 @@ import type { WallNode, WallSegment } from '../types/wall';
 import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
 import type { SceneData } from '../types/scene';
 import { cm } from '../utils/scale';
-import { generateId } from '../utils/id';
 
 // Относительный адрес: Vite проксирует /api на бэкенд (vite.config.ts), поэтому
 // карта работает с любого адреса dev-сервера и в учётной части, без CORS.
@@ -13,24 +12,42 @@ const DEFAULT_PLAN_NAME = 'Мой план';
 // разумный дефолт, не завязанный на текущий зум/окно браузера.
 const DEFAULT_SCENE_SIZE_CM = 5000;
 
-interface WallNodePayload {
-  // Узлы и сегменты создаются одним запросом, и на момент запроса у узла
-  // ещё нет id БД, на который мог бы сослаться сегмент — client_id это
-  // локальный id узла на фронтенде (WallNode.id), который сегмент несёт в
-  // start_client_id/end_client_id (см. WallSegmentPayload и бэкендовую
-  // схему WallNodeCreate/WallSegmentCreate).
-  client_id: string;
+// Геометрия едет на сервер одним документом scene (бэкенд хранит его как
+// JSONB, см. backend/app/schemas/scene.py) — с теми же строковыми id, что на
+// холсте, поэтому после загрузки ссылки сегментов на узлы остаются как есть.
+// version 2 — пока у сцены на фронтенде нет дверей и окон.
+interface SceneNodeDto {
+  id: string;
   x: number;
   y: number;
 }
 
-interface WallSegmentPayload {
-  start_client_id: string;
-  end_client_id: string;
+interface SceneSegmentDto {
+  id: string;
+  start_node_id: string;
+  end_node_id: string;
   thickness: number;
 }
 
+interface ScenePayload {
+  version: 2;
+  nodes: SceneNodeDto[];
+  segments: SceneSegmentDto[];
+}
+
+interface SceneResponse {
+  // Сервер отдаёт сцену в актуальной версии; openings появятся во
+  // фронтендовой модели вместе с дверями и окнами.
+  version: number;
+  nodes: SceneNodeDto[];
+  segments: SceneSegmentDto[];
+  openings: unknown[];
+}
+
 interface WorkspacePayload {
+  // id места на холсте — сервер обновляет рабочее место по нему на месте,
+  // и строка в БД сохраняет свой id между сохранениями.
+  client_id: string;
   x: number;
   y: number;
   width: number;
@@ -38,19 +55,6 @@ interface WorkspacePayload {
   rotation: number;
   label: string;
   status: WorkspaceStatus;
-}
-
-interface WallNodeResponse {
-  id: number;
-  x: number;
-  y: number;
-}
-
-interface WallSegmentResponse {
-  id: number;
-  start_node_id: number;
-  end_node_id: number;
-  thickness: number;
 }
 
 interface WorkspaceResponse extends WorkspacePayload {
@@ -65,25 +69,26 @@ interface FloorPlanResponse {
   background_image_url: string | null;
   created_at: string;
   updated_at: string;
-  nodes: WallNodeResponse[];
-  segments: WallSegmentResponse[];
+  scene: SceneResponse;
   workspaces: WorkspaceResponse[];
 }
 
-function toNodePayload(node: WallNode): WallNodePayload {
-  return { client_id: node.id, x: node.x, y: node.y };
-}
-
-function toSegmentPayload(segment: WallSegment): WallSegmentPayload {
+function toScenePayload(scene: SceneData): ScenePayload {
   return {
-    start_client_id: segment.startNodeId,
-    end_client_id: segment.endNodeId,
-    thickness: segment.thickness,
+    version: 2,
+    nodes: scene.nodes.map((node) => ({ id: node.id, x: node.x, y: node.y })),
+    segments: scene.segments.map((segment) => ({
+      id: segment.id,
+      start_node_id: segment.startNodeId,
+      end_node_id: segment.endNodeId,
+      thickness: segment.thickness,
+    })),
   };
 }
 
 function toWorkspacePayload(workspace: WorkspaceData): WorkspacePayload {
   return {
+    client_id: workspace.id,
     x: workspace.x,
     y: workspace.y,
     width: workspace.width,
@@ -94,24 +99,16 @@ function toWorkspacePayload(workspace: WorkspaceData): WorkspacePayload {
   };
 }
 
-// У узлов/сегментов/рабочих мест с сервера — целочисленный id БД, а не тот
-// string-идентификатор, которым оперирует Konva-сцена. Это разные
-// идентичности (серверная — персистентность, локальная — узел на холсте),
-// поэтому при загрузке генерируем свежие локальные id, а не переиспользуем
-// серверные — и заодно перекладываем ссылки сегментов на узлы (start_node_id/
-// end_node_id) через карту "серверный id → свежий локальный id".
 function fromFloorPlanResponse(data: FloorPlanResponse): SceneData {
-  const localNodeId = new Map<number, string>();
-  const nodes: WallNode[] = data.nodes.map((node) => {
-    const id = generateId('node');
-    localNodeId.set(node.id, id);
-    return { id, x: cm(node.x), y: cm(node.y) };
-  });
-
-  const segments: WallSegment[] = data.segments.map((segment) => ({
-    id: generateId('wall'),
-    startNodeId: localNodeId.get(segment.start_node_id)!,
-    endNodeId: localNodeId.get(segment.end_node_id)!,
+  const nodes: WallNode[] = data.scene.nodes.map((node) => ({
+    id: node.id,
+    x: cm(node.x),
+    y: cm(node.y),
+  }));
+  const segments: WallSegment[] = data.scene.segments.map((segment) => ({
+    id: segment.id,
+    startNodeId: segment.start_node_id,
+    endNodeId: segment.end_node_id,
     thickness: cm(segment.thickness),
   }));
 
@@ -125,7 +122,7 @@ function fromFloorPlanResponse(data: FloorPlanResponse): SceneData {
 
 function fromWorkspaceResponse(workspace: WorkspaceResponse): WorkspaceData {
   return {
-    id: generateId('workspace'),
+    id: workspace.client_id,
     x: cm(workspace.x),
     y: cm(workspace.y),
     width: cm(workspace.width),
@@ -220,8 +217,7 @@ export async function saveFloorPlan(scene: SceneData, existingId: number | null)
     width_cm: DEFAULT_SCENE_SIZE_CM,
     height_cm: DEFAULT_SCENE_SIZE_CM,
     background_image_url: null,
-    nodes: scene.nodes.map(toNodePayload),
-    segments: scene.segments.map(toSegmentPayload),
+    scene: toScenePayload(scene),
     workspaces: scene.workspaces.map(toWorkspacePayload),
   };
 

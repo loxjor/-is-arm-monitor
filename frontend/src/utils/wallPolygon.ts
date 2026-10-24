@@ -38,6 +38,27 @@ function rotate90(d: WallEndpoint): WallEndpoint {
   return { x: -d.y, y: d.x };
 }
 
+/** Прямая грани чужой стены, в которую упирается свободный конец: точка на ней и направление. */
+export interface FaceLine {
+  point: WallEndpoint;
+  dir: WallEndpoint;
+}
+
+/** Пересечение прямых (a, da) и (b, db); null, если они параллельны. */
+function intersectLines(
+  a: WallEndpoint,
+  da: WallEndpoint,
+  b: WallEndpoint,
+  db: WallEndpoint,
+): WallEndpoint | null {
+  const cross = da.x * db.y - da.y * db.x;
+  if (Math.abs(cross) < COLLINEAR_SIN_EPS) {
+    return null;
+  }
+  const t = ((b.x - a.x) * db.y - (b.y - a.y) * db.x) / cross;
+  return { x: a.x + da.x * t, y: a.y + da.y * t };
+}
+
 /**
  * Вершины на стыке двух УГЛОВО СМЕЖНЫХ (идущих подряд при сортировке по
  * углу вокруг узла) лучей rayA → rayB. Возвращает всегда пару точек:
@@ -100,10 +121,9 @@ function wedgeVertices(node: WallEndpoint, rayA: NodeRay, rayB: NodeRay): [WallE
  * заново из текущей геометрии, а не накопленное состояние (ср. удалённый
  * rebuildJoints/setStartExtension). Вырожденные случаи:
  *  - ноль лучей — пустой результат;
- *  - один луч (свободный конец) — "квадратный" торец (как stroke-linecap:
- *    square): точка выступает на halfThickness НАРУЖУ, в сторону,
- *    противоположную направлению луча, и уже от неё берутся обе вершины
- *    по перпендикуляру — а не плоский срез ровно по узлу;
+ *  - один луч (свободный конец) — плоский торец ровно в узле: обе вершины
+ *    по перпендикуляру к оси через узел (как stroke-linecap: butt), без
+ *    выступа за узел;
  *  - два и более лучей — сортируем по углу вокруг узла и для каждой пары
  *    угловых соседей (по кругу, включая пару "последний-первый") считаем
  *    одну вершину через wedgeVertices; у ребра с N соседями получается
@@ -113,6 +133,7 @@ function wedgeVertices(node: WallEndpoint, rayA: NodeRay, rayB: NodeRay): [WallE
 export function computeNodeFaceVertices(
   node: WallEndpoint,
   rays: readonly NodeRay[],
+  abutment?: FaceLine,
 ): Map<string, NodeFaceVertex> {
   const result = new Map<string, NodeFaceVertex>();
 
@@ -120,22 +141,32 @@ export function computeNodeFaceVertices(
     return result;
   }
 
-  if (rays.length === 1) {
-    // "Квадратный" торец: центр грани выступает на halfThickness за узел, в
-    // сторону, ОБРАТНУЮ направлению луча (луч смотрит от узла В сторону
-    // ребра, наружу — противоположное направление). Без этого выступа
-    // свободный конец стены при рисовании визуально "терял" ту половину
-    // площади призрака (wallGhost), что показывалась позади точки старта
-    // ещё до первого движения мыши.
+  if (rays.length === 1 && abutment) {
+    // Свободный конец, упёртый в грань другой стены: торец идёт по линии этой
+    // грани — без квадратного выступа, который влез бы в соседнюю стену (а
+    // под косым углом торчал бы из неё наружу).
     const ray = rays[0];
     const perp = rotate90(ray.dir);
-    const capCenter: WallEndpoint = {
-      x: node.x - ray.dir.x * ray.halfThickness,
-      y: node.y - ray.dir.y * ray.halfThickness,
-    };
+    const leftStart = { x: node.x + perp.x * ray.halfThickness, y: node.y + perp.y * ray.halfThickness };
+    const rightStart = { x: node.x - perp.x * ray.halfThickness, y: node.y - perp.y * ray.halfThickness };
+    const left = intersectLines(leftStart, ray.dir, abutment.point, abutment.dir);
+    const right = intersectLines(rightStart, ray.dir, abutment.point, abutment.dir);
+    if (left && right) {
+      result.set(ray.key, { left, right });
+      return result;
+    }
+  }
+
+  if (rays.length === 1) {
+    // Плоский торец ровно в узле, без выступа: стена заканчивается там, где её
+    // начали и закончили (как у RemPlanner). Раньше торец выступал на
+    // halfThickness ("квадратный"), и нарисованная стена после отпускания
+    // оказывалась длиннее на полтолщины с каждого конца.
+    const ray = rays[0];
+    const perp = rotate90(ray.dir);
     result.set(ray.key, {
-      left: { x: capCenter.x + perp.x * ray.halfThickness, y: capCenter.y + perp.y * ray.halfThickness },
-      right: { x: capCenter.x - perp.x * ray.halfThickness, y: capCenter.y - perp.y * ray.halfThickness },
+      left: { x: node.x + perp.x * ray.halfThickness, y: node.y + perp.y * ray.halfThickness },
+      right: { x: node.x - perp.x * ray.halfThickness, y: node.y - perp.y * ray.halfThickness },
     });
     return result;
   }

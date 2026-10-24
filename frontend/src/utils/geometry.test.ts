@@ -4,7 +4,59 @@ import {
   findSnappedGuideLineDeg,
   intersectRaySegment,
   nearestPointOnSegment,
+  rayStartRelation,
 } from './geometry';
+
+describe('rayStartRelation — откуда начинается новая стена относительно существующей', () => {
+  // Стена (100,100)→(400,100) толщиной 10: тело y ∈ [95, 105].
+  const wallStart = { x: 100, y: 100 };
+  const wallEnd = { x: 400, y: 100 };
+  const half = 5;
+  const relation = (start: { x: number; y: number }, angleDeg: number) => {
+    const rad = (angleDeg * Math.PI) / 180;
+    return rayStartRelation(start, { x: Math.cos(rad), y: Math.sin(rad) }, wallStart, wallEnd, half, 0.5);
+  };
+
+  it('из узла стены под острым углом — старт внутри её тела, стена не препятствие', () => {
+    expect(relation({ x: 400, y: 100 }, 135)).toBe('inside');
+    expect(relation({ x: 400, y: 100 }, 160)).toBe('inside');
+    expect(relation({ x: 400, y: 100 }, 90)).toBe('inside');
+  });
+
+  it('из узла наружу, продолжая стену, — тоже внутри, а не нахлёст', () => {
+    expect(relation({ x: 400, y: 100 }, 0)).toBe('inside');
+    expect(relation({ x: 100, y: 100 }, 180)).toBe('inside');
+  });
+
+  it('из узла назад вдоль самой стены — нахлёст', () => {
+    expect(relation({ x: 400, y: 100 }, 180)).toBe('overlaps');
+    expect(relation({ x: 400, y: 100 }, 175)).toBe('overlaps');
+  });
+
+  it('с оси (T-примыкание) под любым заметным углом — внутри', () => {
+    for (const angle of [90, -90, 45, 135, 30, 15]) {
+      expect(relation({ x: 250, y: 100 }, angle)).toBe('inside');
+    }
+  });
+
+  it('с оси почти вдоль стены — нахлёст', () => {
+    expect(relation({ x: 250, y: 100 }, 0)).toBe('overlaps');
+    expect(relation({ x: 250, y: 100 }, 185)).toBe('overlaps');
+  });
+
+  it('с грани наружу — снаружи, внутрь тела — отказ', () => {
+    expect(relation({ x: 250, y: 95 }, -90)).toBe('outside');
+    expect(relation({ x: 250, y: 95 }, -60)).toBe('outside');
+    expect(relation({ x: 250, y: 95 }, 90)).toBe('into-face');
+    expect(relation({ x: 250, y: 105 }, 90)).toBe('outside');
+    expect(relation({ x: 250, y: 105 }, -45)).toBe('into-face');
+  });
+
+  it('точка вдали от стены — снаружи', () => {
+    expect(relation({ x: 250, y: 300 }, -90)).toBe('outside');
+    expect(relation({ x: 500, y: 100 }, 180)).toBe('outside');
+  });
+});
 
 describe('angleDiffDeg', () => {
   it('returns a simple positive difference', () => {

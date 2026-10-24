@@ -114,10 +114,18 @@ def seed_floor_plan(db: Session) -> None:
             name="Главное здание, 3 этаж (каб. 301–302)",
             width_cm=1200,
             height_cm=600,
-            nodes=[{"client_id": key, "x": x, "y": y} for key, (x, y) in nodes.items()],
-            segments=[{"start_client_id": a, "end_client_id": b, "thickness": 15} for a, b in walls],
+            scene={
+                "version": 2,
+                "nodes": [{"id": key, "x": x, "y": y} for key, (x, y) in nodes.items()],
+                "segments": [
+                    {"id": f"{a}{b}", "start_node_id": a, "end_node_id": b, "thickness": 15} for a, b in walls
+                ],
+            },
             workspaces=[
                 {
+                    # client_id по номеру рабочего места из справочника — задел
+                    # под связь стола на карте с учётным рабочим местом.
+                    "client_id": f"wp-{number}",
                     "x": x, "y": y, "width": 120, "height": 80, "rotation": 0, "label": f"РМ {number}",
                     "status": "occupied" if number in occupied else "free",
                 }

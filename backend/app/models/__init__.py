@@ -16,8 +16,6 @@ from app.models.floor_plan import FloorPlan
 from app.models.inventory import Inventory, InventoryResult
 from app.models.organization import Building, Department, Employee, Room, Workplace
 from app.models.ticket import Ticket, TicketWork
-from app.models.wall_node import WallNode
-from app.models.wall_segment import WallSegment
 from app.models.workspace import Workspace, WorkspaceStatus
 from app.models.writeoff import WriteoffAct
 
@@ -48,8 +46,6 @@ __all__ = [
     "TicketStatus",
     "TicketType",
     "TicketWork",
-    "WallNode",
-    "WallSegment",
     "Workplace",
     "Workspace",
     "WorkspaceStatus",

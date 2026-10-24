@@ -83,6 +83,10 @@ body {
   font-size: 13px;
 }
 
+#toolbar .thickness-label input.length-input {
+  width: 64px;
+}
+
 #toolbar .scale-readout {
   display: inline-flex;
   align-items: center;

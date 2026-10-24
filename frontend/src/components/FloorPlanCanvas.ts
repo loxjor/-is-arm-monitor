@@ -1,13 +1,19 @@
 import Konva from 'konva';
 import { Workspace } from './Workspace';
 import { Wall } from './Wall';
+import { WallControls, type WallEnd } from './WallControls';
 import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
 import type { WallNode, WallSegment } from '../types/wall';
 import type { SceneData, SceneDataV1 } from '../types/scene';
 import { migrateSceneData } from '../utils/wallGraph';
-import { computeNodeFaceVertices, buildSegmentPolygon, type NodeRay } from '../utils/wallPolygon';
+import {
+  computeNodeFaceVertices,
+  buildSegmentPolygon,
+  type FaceLine,
+  type NodeRay,
+} from '../utils/wallPolygon';
 import { generateId } from '../utils/id';
-import { cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
+import { PIXELS_PER_CM, cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 import { GRID_MAJOR_EVERY, GRID_MINOR_SPACING_PX, getGridTilePattern } from '../utils/grid';
 import {
@@ -16,13 +22,41 @@ import {
   angleDiffDeg,
   findSnappedGuideLineDeg,
   intersectRaySegment,
+  rayStartRelation,
 } from '../utils/geometry';
+import { alignmentLines, snapToAlignment, type AlignResult } from '../utils/wallAlign';
+import { findRooms, polygonCentroid } from '../utils/rooms';
+import { pointAtDistance, shiftAxisForOneSidedThickness, type WallSide } from '../utils/wallEdit';
+import {
+  faceForwardGeometry,
+  END_SECTOR_LIMIT_DEG,
+  endGuideLinesDeg,
+  endSectorGeometry,
+  faceGuideLinesDeg,
+  findFaceHug,
+  isInForwardSector,
+  isInSector,
+  nextDrawMode,
+  type DrawMode,
+  type FaceHug,
+  type WallBody,
+} from '../utils/wallStart';
 
 // 'view' — только просмотр (учётная часть): объекты не выделяются и не
 // двигаются, работают лишь зум и панорамирование.
 export type CanvasMode = 'select' | 'draw-wall' | 'view';
 
+/** То, что тулбар показывает про выделенную стену. */
+export interface SelectedWallInfo {
+  lengthCm: Cm;
+  thicknessCm: Cm;
+}
+
 const WALL_DRAW_MIN_LENGTH_CM = 3;
+const MAX_WALL_LENGTH_CM = 10000;
+// Шаг кнопок толщины −/+ у выделенной стены; с Shift — крупный шаг.
+const THICKNESS_STEP_CM = 1;
+const THICKNESS_STEP_LARGE_CM = 5;
 const DEFAULT_WALL_THICKNESS_CM = 10;
 const MIN_WALL_THICKNESS_CM = 2;
 const MAX_WALL_THICKNESS_CM = 60;
@@ -40,6 +74,16 @@ const DIMENSION_LABEL_GAP_PX = 14;
 // нажатия), а допуск в сантиметрах от длины стены не зависит — см.
 // findSnappedGuideLineDeg в utils/geometry.ts.
 const GUIDE_SNAP_TOLERANCE_CM = 5;
+// Выравнивание по осям других стен захватывает чуть шире угловых
+// направляющих: курсор "притормаживает" у линии, а не проскакивает её.
+const ALIGN_SNAP_TOLERANCE_CM = 8;
+// Призрак прилегает к грани, пока курсор не дальше толщины + 5 см от неё
+// (RemPlanner: 2·_offset + 5 при _offset = полутолщины) — в см сцены, а не в
+// экранных px, как и у них.
+const FACE_HUG_EXTRA_CM = 5;
+// Штырь при нажатии у грани тянется за курсором внутри квадрата призрака, но
+// не короче 80% толщины (у RemPlanner 8 при толщине 10).
+const FACE_STUB_MIN_FRACTION = 0.8;
 const GUIDE_LINE_LENGTH_PX = 4000;
 const GUIDE_HIGHLIGHT_RADIUS_PX = 40;
 
@@ -58,6 +102,9 @@ const SNAP_INDICATOR_RADIUS_PX = 6;
 // Столкновения ближе этого расстояния от точки старта игнорируем — обычно
 // это та самая стена, от грани/угла которой мы оттолкнулись.
 const WALL_COLLISION_IGNORE_RADIUS_PX = 2;
+// Допуск "старт лежит на грани/оси" в px сцены: точки привязки к грани и оси
+// вычисляются ровно, расхождение — только погрешность float.
+const RAY_START_EPSILON_PX = 0.5;
 
 // Диапазон зума колесом мыши (stage.scale()) и шаг увеличения за одно
 // деление колеса.
@@ -85,6 +132,32 @@ type WallSnap =
   | { kind: 'face'; point: WallEndpoint };
 
 /**
+ * Куда встанет начало новой стены под курсором и как нарисовать призрак.
+ * Угол — существующий узел (призрак по центру узла); грань — точка контакта
+ * на грани чужой стены, а призрак вплотную снаружи (см. utils/wallStart.ts).
+ */
+interface WallStartHit {
+  snap: WallSnap | null;
+  ghostCenter: WallEndpoint;
+  ghostRotationDeg: number;
+  face: FaceHug | null;
+  // Старт от торца — продолжение свободного конца стены: направление
+  // продолжения (от тела стены наружу) и перпендикуляр к нему; допустимые
+  // углы новой стены — ±135° от продолжения (см. endSectorGeometry).
+  endSector: { forward: WallEndpoint; side: WallEndpoint } | null;
+}
+
+/** Итог расчёта конца рисуемой стены (см. resolveWallEnd). */
+interface WallEndResolution {
+  lengthPx: number;
+  angleDeg: number;
+  snap: WallSnap | null;
+  snappedGuideDeg: number | null;
+  /** Выравнивание конца по линиям от других стен (если сработало). */
+  align?: AlignResult;
+}
+
+/**
  * Обёртка над Konva.Stage: слой фона (план этажа), слой стен (структура
  * здания), слой рабочих мест и общий Transformer для выделения/ресайза/
  * поворота. Поддерживает два режима работы:
@@ -108,8 +181,15 @@ export class FloorPlanCanvas {
   private gridMinorRect: Konva.Rect | null = null;
   private backgroundLayer: Konva.Layer;
   private structureLayer: Konva.Layer;
+  private dimensionLayer: Konva.Layer;
   private mainLayer: Konva.Layer;
+  private controlsLayer: Konva.Layer;
   private transformer: Konva.Transformer;
+  private wallControls: WallControls;
+  private onSelectionChange: ((wall: SelectedWallInfo | null) => void) | null = null;
+  // Перетаскивание ручки конца выделенной стены: какой узел тянем и к какому
+  // чужому узлу он сейчас примагничен (тогда при отпускании узлы сливаются).
+  private handleDrag: { nodeId: string; mergeTargetNodeId: string | null } | null = null;
 
   private workspaces = new Map<string, Workspace>();
   private nodes = new Map<string, WallNode>();
@@ -148,12 +228,28 @@ export class FloorPlanCanvas {
 
   private wallDrawStart: { x: number; y: number } | null = null;
   private wallDrawStartSnap: WallSnap | null = null;
+  // Старт от грани чужой стены: грань и выбранный режим протяжки — вперёд
+  // свободным углом или параллельно грани, прижавшись к ней (см. nextDrawMode).
+  private wallDrawFace: FaceHug | null = null;
+  private wallDrawMode: DrawMode = 'none';
+  // Старт от торца: сектор допустимых углов ±135° от продолжения стены и
+  // красный сектор запрета позади торца (см. WallStartHit.endSector).
+  private wallDrawEndSector: WallStartHit['endSector'] = null;
+  private forbiddenWedge: Konva.Wedge | null = null;
+  // Ось рисуемой стены (между узлами) — итог превью: длина и угол.
+  private wallDrawAxis = { lengthPx: 0, angleDeg: 0 };
   private wallDrawEndSnap: WallSnap | null = null;
   private wallPreview: Konva.Rect | null = null;
   private wallLengthLabel: Konva.Text | null = null;
   private wallThicknessLabel: Konva.Text | null = null;
   private guideHighlight: Konva.Circle | null = null;
   private guideLines: Konva.Line[] = [];
+  // Пунктир выравнивания от концов/узлов других стен и заливка замкнутых помещений.
+  private alignGuideNodes: (Konva.Line | Konva.Circle)[] = [];
+  private roomGroup = new Konva.Group({ listening: false });
+  // Мировые углы линий-направляющих текущей протяжки: четыре мировые оси
+  // для свободного старта, нормаль и ±45° — для старта от грани.
+  private guideAnglesDeg: number[] = GUIDE_LINE_ANGLES_DEG;
   private wallSnapIndicator: Konva.Circle | null = null;
   private wallGhost: Konva.Rect | null = null;
   private readonly resizeObserver: ResizeObserver;
@@ -168,7 +264,17 @@ export class FloorPlanCanvas {
     this.gridLayer = new Konva.Layer({ listening: false });
     this.backgroundLayer = new Konva.Layer({ listening: false });
     this.structureLayer = new Konva.Layer();
+    this.dimensionLayer = new Konva.Layer({ listening: false });
     this.mainLayer = new Konva.Layer();
+    this.controlsLayer = new Konva.Layer();
+    this.wallControls = new WallControls({
+      onHandleDragStart: (end) => this.handleWallEndDragStart(end),
+      onHandleDragMove: (end, pos, shiftKey) => this.handleWallEndDragMove(end, pos, shiftKey),
+      onHandleDragEnd: () => this.handleWallEndDragEnd(),
+      onThicknessStep: (side, direction, shiftKey) =>
+        this.stepSelectedWallThickness(side, direction * (shiftKey ? THICKNESS_STEP_LARGE_CM : THICKNESS_STEP_CM)),
+    });
+    this.controlsLayer.add(this.wallControls.group);
 
     this.transformer = new Konva.Transformer({
       rotateEnabled: true,
@@ -191,10 +297,13 @@ export class FloorPlanCanvas {
       },
     });
 
+    this.backgroundLayer.add(this.roomGroup);
     this.stage.add(this.gridLayer);
     this.stage.add(this.backgroundLayer);
     this.stage.add(this.structureLayer);
+    this.stage.add(this.dimensionLayer);
     this.stage.add(this.mainLayer);
+    this.stage.add(this.controlsLayer);
     this.mainLayer.add(this.transformer);
 
     this.drawGrid();
@@ -318,6 +427,7 @@ export class FloorPlanCanvas {
   private applyZoomVisuals(scale: number): void {
     this.gridMinorRect?.visible(scale > GRID_MINOR_VISIBLE_ABOVE_SCALE);
     this.gridLayer.batchDraw();
+    this.renderWallOverlays();
     this.onScaleChange?.(scale);
   }
 
@@ -591,9 +701,16 @@ export class FloorPlanCanvas {
   private registerWallSegment(segment: WallSegment): Wall {
     const wall = new Wall(segment, (selected) => this.selectWall(selected));
     wall.setDraggable(this.mode === 'select');
-    wall.line.on('dragstart transformstart', () => this.pushUndoSnapshot());
+    wall.line.on('dragstart transformstart', () => {
+      this.pushUndoSnapshot();
+      // Ручки и кнопки стоят по старым координатам узлов, пока тело стены
+      // едет — вернутся на место в rebuildWallGeometry после dragend.
+      this.wallControls.hide();
+      this.controlsLayer.batchDraw();
+    });
     wall.line.on('dragend', () => this.handleWallDragEnd(wall));
     this.structureLayer.add(wall.line);
+    this.dimensionLayer.add(wall.dimensionGroup);
     this.walls.set(segment.id, wall);
     this.transformer.moveToTop();
     return wall;
@@ -648,7 +765,8 @@ export class FloorPlanCanvas {
         return;
       }
       const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
-      computeNodeFaceVertices(nodePx, rays).forEach((face, key) => faceByRayKey.set(key, face));
+      const abutment = rays.length === 1 ? this.findAbutmentFacePx(nodeId, nodePx) : undefined;
+      computeNodeFaceVertices(nodePx, rays, abutment).forEach((face, key) => faceByRayKey.set(key, face));
     });
 
     this.walls.forEach((wall) => {
@@ -657,10 +775,328 @@ export class FloorPlanCanvas {
       if (!startFace || !endFace) {
         return;
       }
-      wall.render(buildSegmentPolygon(startFace, endFace));
+      wall.render(
+        buildSegmentPolygon(startFace, endFace),
+        this.nodePointPx(wall.startNodeId),
+        this.nodePointPx(wall.endNodeId),
+      );
     });
 
     this.structureLayer.batchDraw();
+    this.renderWallOverlays();
+  }
+
+  /**
+   * Грань чужой стены, на которой лежит свободный узел (конец, привязанный
+   * к грани при рисовании, см. WallSnap 'face'), — по её линии обрезается
+   * торец (см. computeNodeFaceVertices).
+   */
+  private findAbutmentFacePx(nodeId: string, nodePx: WallEndpoint): FaceLine | undefined {
+    for (const wall of this.walls.values()) {
+      if (wall.startNodeId === nodeId || wall.endNodeId === nodeId) {
+        continue;
+      }
+      const { startPx, endPx, thicknessPx, lengthPx } = this.segmentGeometryPx(wall);
+      if (lengthPx === 0) {
+        continue;
+      }
+      const dir = { x: (endPx.x - startPx.x) / lengthPx, y: (endPx.y - startPx.y) / lengthPx };
+      const relX = nodePx.x - startPx.x;
+      const relY = nodePx.y - startPx.y;
+      const t = relX * dir.x + relY * dir.y;
+      const d = -relX * dir.y + relY * dir.x;
+      const half = thicknessPx / 2;
+      if (t < 0 || t > lengthPx || Math.abs(Math.abs(d) - half) > RAY_START_EPSILON_PX) {
+        continue;
+      }
+      const sign = Math.sign(d);
+      return {
+        point: { x: startPx.x - dir.y * half * sign, y: startPx.y + dir.x * half * sign },
+        dir,
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * Всё, что рисуется поверх стен и зависит от масштаба: размеры по граням,
+   * ручки/кнопки выделенной стены. Плюс тулбар узнаёт новые длину/толщину
+   * выделенной стены — геометрия только что могла поменяться.
+   */
+  private renderWallOverlays(): void {
+    const scale = this.stage.scaleX();
+    this.walls.forEach((wall) => wall.renderDimensions(scale));
+    this.renderRooms(scale);
+    this.dimensionLayer.batchDraw();
+    this.updateWallControls();
+    this.emitSelectionChange();
+  }
+
+  private get selectedWall(): Wall | undefined {
+    return this.selectedId ? this.walls.get(this.selectedId) : undefined;
+  }
+
+  private updateWallControls(): void {
+    const wall = this.selectedWall;
+    if (!wall || this.mode !== 'select') {
+      this.wallControls.hide();
+    } else {
+      const { startPx, endPx, thicknessPx } = this.segmentGeometryPx(wall);
+      this.wallControls.show(startPx, endPx, thicknessPx, this.stage.scaleX());
+    }
+    this.controlsLayer.batchDraw();
+  }
+
+  /** Подписка тулбара на выделение стены: null — выделена не стена или ничего. Вызывается сразу с текущим состоянием. */
+  setOnSelectionChange(callback: (wall: SelectedWallInfo | null) => void): void {
+    this.onSelectionChange = callback;
+    this.emitSelectionChange();
+  }
+
+  private emitSelectionChange(): void {
+    const wall = this.selectedWall;
+    if (!wall) {
+      this.onSelectionChange?.(null);
+      return;
+    }
+    const { lengthPx } = this.segmentGeometryPx(wall);
+    this.onSelectionChange?.({ lengthCm: pxToCm(lengthPx), thicknessCm: wall.thicknessCm });
+  }
+
+  /** Сколько стен сходится в каждом узле. */
+  private nodeDegrees(): Map<string, number> {
+    const degrees = new Map<string, number>();
+    this.walls.forEach((wall) => {
+      degrees.set(wall.startNodeId, (degrees.get(wall.startNodeId) ?? 0) + 1);
+      degrees.set(wall.endNodeId, (degrees.get(wall.endNodeId) ?? 0) + 1);
+    });
+    return degrees;
+  }
+
+  /**
+   * Точная длина выделенной стены по оси. Двигается тот конец, к которому
+   * примыкает меньше стен (обычно свободный), — так ввод длины меньше всего
+   * тянет за собой соседей; при равенстве двигается конец стены. Возвращает
+   * применённое значение или null, если стена не выделена.
+   */
+  setSelectedWallLength(lengthCm: number): Cm | null {
+    const wall = this.selectedWall;
+    if (!wall || !Number.isFinite(lengthCm)) {
+      return null;
+    }
+    const clamped = cm(Math.min(MAX_WALL_LENGTH_CM, Math.max(WALL_DRAW_MIN_LENGTH_CM, lengthCm)));
+    const degrees = this.nodeDegrees();
+    const moveEnd = (degrees.get(wall.endNodeId) ?? 0) <= (degrees.get(wall.startNodeId) ?? 0);
+    const fixedId = moveEnd ? wall.startNodeId : wall.endNodeId;
+    const movingId = moveEnd ? wall.endNodeId : wall.startNodeId;
+    const movingNode = this.nodes.get(movingId);
+    const target = pointAtDistance(this.nodePointPx(fixedId), this.nodePointPx(movingId), cmToPx(clamped));
+    if (!movingNode || !target) {
+      return null;
+    }
+
+    this.pushUndoSnapshot();
+    movingNode.x = pxToCm(target.x);
+    movingNode.y = pxToCm(target.y);
+    this.rebuildWallGeometry();
+    return clamped;
+  }
+
+  /**
+   * Толщина выделенной стены меняется только со стороны side: противоположная
+   * грань остаётся на месте, ось (оба узла) сдвигается на половину разницы
+   * (см. shiftAxisForOneSidedThickness). Узлы общие, поэтому примыкающие стены
+   * удлиняются/укорачиваются вслед за этим, как у RemPlanner. Толщина по
+   * умолчанию для новых стен при этом не меняется.
+   */
+  private stepSelectedWallThickness(side: WallSide, deltaCm: number): void {
+    const wall = this.selectedWall;
+    if (!wall) {
+      return;
+    }
+    const newThickness = cm(
+      Math.min(MAX_WALL_THICKNESS_CM, Math.max(MIN_WALL_THICKNESS_CM, wall.thicknessCm + deltaCm)),
+    );
+    const startNode = this.nodes.get(wall.startNodeId);
+    const endNode = this.nodes.get(wall.endNodeId);
+    if (newThickness === wall.thicknessCm || !startNode || !endNode) {
+      return;
+    }
+
+    this.pushUndoSnapshot();
+    const shifted = shiftAxisForOneSidedThickness(startNode, endNode, wall.thicknessCm, newThickness, side);
+    startNode.x = cm(shifted.start.x);
+    startNode.y = cm(shifted.start.y);
+    endNode.x = cm(shifted.end.x);
+    endNode.y = cm(shifted.end.y);
+    wall.thicknessCm = newThickness;
+    this.rebuildWallGeometry();
+  }
+
+  private wallEndNodeId(end: WallEnd): string | null {
+    const wall = this.selectedWall;
+    if (!wall) {
+      return null;
+    }
+    return end === 'start' ? wall.startNodeId : wall.endNodeId;
+  }
+
+  private handleWallEndDragStart(end: WallEnd): void {
+    const nodeId = this.wallEndNodeId(end);
+    if (!nodeId) {
+      return;
+    }
+    this.pushUndoSnapshot();
+    this.handleDrag = { nodeId, mergeTargetNodeId: null };
+  }
+
+  /**
+   * Ручка конца двигает узел графа целиком — вместе с ним и все стены, что
+   * его делят. Привязки те же, что при рисовании: к чужому узлу (тогда при
+   * отпускании узлы сливаются в один угол) или к направляющим через 45° от
+   * другого конца этой стены; Shift отключает направляющие.
+   */
+  private handleWallEndDragMove(end: WallEnd, pos: WallEndpoint, shiftKey: boolean): WallEndpoint {
+    const wall = this.selectedWall;
+    const drag = this.handleDrag;
+    const node = drag ? this.nodes.get(drag.nodeId) : undefined;
+    if (!wall || !drag || !node) {
+      return pos;
+    }
+
+    // Узлы, уже соединённые с этим одной стеной, в слияние не берём — иначе
+    // стена между ними схлопнулась бы в точку.
+    const adjacent = new Set<string>([drag.nodeId]);
+    this.walls.forEach((other) => {
+      if (other.startNodeId === drag.nodeId) adjacent.add(other.endNodeId);
+      if (other.endNodeId === drag.nodeId) adjacent.add(other.startNodeId);
+    });
+
+    let target = pos;
+    let guideSnapped = false;
+    let mergeTargetNodeId: string | null = null;
+    let bestDist = this.snapRadiusPx;
+    this.nodes.forEach((candidate, id) => {
+      if (adjacent.has(id)) {
+        return;
+      }
+      const point = { x: cmToPx(candidate.x), y: cmToPx(candidate.y) };
+      const dist = Math.hypot(pos.x - point.x, pos.y - point.y);
+      if (dist <= bestDist) {
+        bestDist = dist;
+        target = point;
+        mergeTargetNodeId = id;
+      }
+    });
+
+    if (!mergeTargetNodeId && !shiftKey) {
+      const anchor = this.nodePointPx(end === 'start' ? wall.endNodeId : wall.startNodeId);
+      const dx = pos.x - anchor.x;
+      const dy = pos.y - anchor.y;
+      const guideDeg = findSnappedGuideLineDeg(dx, dy, cmToPx(GUIDE_SNAP_TOLERANCE_CM));
+      if (guideDeg !== null) {
+        const rad = (guideDeg * Math.PI) / 180;
+        const along = dx * Math.cos(rad) + dy * Math.sin(rad);
+        target = { x: anchor.x + Math.cos(rad) * along, y: anchor.y + Math.sin(rad) * along };
+        guideSnapped = true;
+      }
+    }
+
+    if (!mergeTargetNodeId) {
+      target = this.constrainHandleTarget(drag.nodeId, end === 'start' ? wall.endNodeId : wall.startNodeId, pos, target, guideSnapped);
+    }
+
+    drag.mergeTargetNodeId = mergeTargetNodeId;
+    node.x = pxToCm(target.x);
+    node.y = pxToCm(target.y);
+    this.rebuildWallGeometry();
+    return target;
+  }
+
+  /**
+   * Конец стены при правке ведёт себя как при рисовании: магнитится к грани/
+   * оси чужой стены (если не держит направляющую) и не проходит сквозь стены
+   * — упирается в первую на пути от противоположного конца. Стены, делящие
+   * двигаемый узел, не в счёт: они едут вместе с ним.
+   */
+  private constrainHandleTarget(
+    nodeId: string,
+    anchorNodeId: string,
+    pos: WallEndpoint,
+    target: WallEndpoint,
+    guideSnapped: boolean,
+  ): WallEndpoint {
+    const exclude = new Set<string>();
+    this.walls.forEach((w) => {
+      if (w.startNodeId === nodeId || w.endNodeId === nodeId) {
+        exclude.add(w.id);
+      }
+    });
+    let result = target;
+    if (!guideSnapped) {
+      const snap = this.findWallSnapPx(pos, exclude);
+      if (snap && snap.kind !== 'corner') {
+        result = snap.point;
+      }
+    }
+    const anchor = this.nodePointPx(anchorNodeId);
+    const dx = result.x - anchor.x;
+    const dy = result.y - anchor.y;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) {
+      return result;
+    }
+    const hitT = this.findFirstWallCollisionTPx(anchor, dx / length, dy / length, length, exclude);
+    if (hitT !== null && hitT > 0 && hitT < length) {
+      return { x: anchor.x + (dx / length) * hitT, y: anchor.y + (dy / length) * hitT };
+    }
+    return result;
+  }
+
+  private handleWallEndDragEnd(): void {
+    const drag = this.handleDrag;
+    this.handleDrag = null;
+    if (drag?.mergeTargetNodeId) {
+      this.mergeNodes(drag.nodeId, drag.mergeTargetNodeId);
+    } else if (drag) {
+      this.joinAbuttingFreeEnds();
+    }
+  }
+
+  /**
+   * Сливает узел fromId в intoId: все стены, ссылавшиеся на fromId, теперь
+   * сходятся в intoId — получается обычный общий угол графа. Стены,
+   * схлопнувшиеся в точку, и дубликаты (две стены между одной парой узлов)
+   * выбрасываются. Перестраивается через restore — тем же путём, что undo;
+   * снимок для отмены уже сделан в начале перетаскивания.
+   */
+  private mergeNodes(fromId: string, intoId: string): void {
+    const data = this.serialize();
+    const seenPairs = new Set<string>();
+    const segments = data.segments
+      .map((segment) => ({
+        ...segment,
+        startNodeId: segment.startNodeId === fromId ? intoId : segment.startNodeId,
+        endNodeId: segment.endNodeId === fromId ? intoId : segment.endNodeId,
+      }))
+      .filter((segment) => {
+        if (segment.startNodeId === segment.endNodeId) {
+          return false;
+        }
+        const pair = [segment.startNodeId, segment.endNodeId].sort().join('|');
+        if (seenPairs.has(pair)) {
+          return false;
+        }
+        seenPairs.add(pair);
+        return true;
+      });
+
+    const selectedId = this.selectedId;
+    this.restore({ ...data, nodes: data.nodes.filter((node) => node.id !== fromId), segments });
+    const wall = selectedId ? this.walls.get(selectedId) : undefined;
+    if (wall) {
+      this.selectWall(wall);
+    }
   }
 
   /**
@@ -728,7 +1164,66 @@ export class FloorPlanCanvas {
     });
     this.transformer.moveToTop();
     this.rebuildWallGeometry();
-    return wall;
+    this.joinAbuttingFreeEnds();
+    return this.walls.get(wall.id) ?? wall;
+  }
+
+  /**
+   * Свободный конец, упёршийся в грань другой стены у её свободного торца
+   * (ближе чем толщина обеих стен), — это угол, а не T-стык: узел сливается с
+   * торцом хозяина, и стены получают общий узел с обычным миттером. Дальше от
+   * торца упор остаётся T-примыканием.
+   */
+  private joinAbuttingFreeEnds(): void {
+    const degrees = this.nodeDegrees();
+    for (const [nodeId, node] of this.nodes) {
+      if (degrees.get(nodeId) !== 1) {
+        continue;
+      }
+      const own = [...this.walls.values()].find((w) => w.startNodeId === nodeId || w.endNodeId === nodeId);
+      if (!own) {
+        continue;
+      }
+      const otherId = own.startNodeId === nodeId ? own.endNodeId : own.startNodeId;
+      const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
+      const otherPx = this.nodePointPx(otherId);
+      const ownDir = { x: nodePx.x - otherPx.x, y: nodePx.y - otherPx.y };
+      const reach = (thicknessPx: number): number => cmToPx(own.thicknessCm) / 2 + thicknessPx / 2;
+      for (const host of this.walls.values()) {
+        if (host.startNodeId === nodeId || host.endNodeId === nodeId) {
+          continue;
+        }
+        const { startPx, endPx, thicknessPx } = this.segmentGeometryPx(host);
+        const hostDir = { x: endPx.x - startPx.x, y: endPx.y - startPx.y };
+        const cross = ownDir.x * hostDir.y - ownDir.y * hostDir.x;
+        if (Math.abs(cross) < 1e-6) {
+          continue;
+        }
+        // Пересечение осей — будущий угол; сдвиг каждой стены идёт только вдоль
+        // её же оси, поэтому направления не перекашиваются.
+        const t = ((startPx.x - otherPx.x) * hostDir.y - (startPx.y - otherPx.y) * hostDir.x) / cross;
+        const corner = { x: otherPx.x + ownDir.x * t, y: otherPx.y + ownDir.y * t };
+        const limit = reach(thicknessPx);
+        if (Math.hypot(corner.x - nodePx.x, corner.y - nodePx.y) > limit * 2) {
+          continue;
+        }
+        const target = [host.startNodeId, host.endNodeId].find((id) => {
+          const hostNode = this.nodes.get(id);
+          return (
+            degrees.get(id) === 1 &&
+            hostNode !== undefined &&
+            Math.hypot(corner.x - cmToPx(hostNode.x), corner.y - cmToPx(hostNode.y)) <= limit
+          );
+        });
+        const targetNode = target ? this.nodes.get(target) : undefined;
+        if (target && targetNode) {
+          targetNode.x = pxToCm(corner.x);
+          targetNode.y = pxToCm(corner.y);
+          this.mergeNodes(nodeId, target);
+          return;
+        }
+      }
+    }
   }
 
   /** Узел для одного конца рисуемой стены — см. варианты в finishWallDraw. */
@@ -764,7 +1259,7 @@ export class FloorPlanCanvas {
     const { startNodeId, endNodeId, thicknessCm } = wall;
     const newNodeId = this.createNodeAt(axisPointPx);
 
-    wall.line.destroy();
+    wall.destroy();
     this.walls.delete(wallId);
 
     this.registerWallSegment({
@@ -841,7 +1336,7 @@ export class FloorPlanCanvas {
    *    новый узел просто ставится рядом, как самостоятельный.
    * Побеждает ближайшая по расстоянию цель среди всех типов.
    */
-  private findWallSnapPx(pos: WallEndpoint): WallSnap | null {
+  private findWallSnapPx(pos: WallEndpoint, exclude?: ReadonlySet<string>): WallSnap | null {
     const snapRadiusPx = this.snapRadiusPx;
     const axisSnapRadiusPx = this.axisSnapRadiusPx;
     let bestDist = snapRadiusPx;
@@ -857,6 +1352,9 @@ export class FloorPlanCanvas {
     }
 
     for (const wall of this.walls.values()) {
+      if (exclude?.has(wall.id)) {
+        continue;
+      }
       const { startPx, thicknessPx, rotation, lengthPx } = this.segmentGeometryPx(wall);
       const rad = (rotation * Math.PI) / 180;
       const dirX = Math.cos(rad);
@@ -897,6 +1395,101 @@ export class FloorPlanCanvas {
     return best;
   }
 
+  /** Стены как тела для привязки старта к граням — ось, полутолщина и готовый полигон. */
+  private wallBodies(): WallBody[] {
+    const bodies: WallBody[] = [];
+    this.walls.forEach((wall) => {
+      const polygon = wall.getPolygon();
+      if (polygon.length !== 4) {
+        return;
+      }
+      const { startPx, endPx, thicknessPx } = this.segmentGeometryPx(wall);
+      bodies.push({
+        id: wall.id,
+        start: startPx,
+        end: endPx,
+        halfThickness: thicknessPx / 2,
+        polygon,
+      });
+    });
+    return bodies;
+  }
+
+  /**
+   * Привязка НАЧАЛА стены (и призрака до нажатия) — как у RemPlanner, призрак
+   * никогда не входит в тело чужой стены: рядом со свободным концом (в радиусе
+   * привязки) стена продолжит его — начнётся в этом узле; иначе, если курсор над стеной или у её грани,
+   * призрак прилегает к грани снаружи (см. findFaceHug), а стена начнётся в
+   * точке контакта на грани — без разбиения стены-хозяина, торец обрежется
+   * по грани (findAbutmentFacePx). Старт по оси больше не делается: в тело
+   * стены призрак не заходит.
+   */
+  private findWallStartSnapPx(pos: WallEndpoint): WallStartHit {
+    let corner: WallSnap | null = null;
+    let bestDist = this.snapRadiusPx;
+    const degrees = this.nodeDegrees();
+    for (const [nodeId, node] of this.nodes) {
+      const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
+      // Продолжить можно только свободный конец: в узле, где уже сходятся
+      // несколько стен, или в основании стены, приставленной к чужой грани,
+      // призрак по центру узла сидел бы наполовину в теле стены — там
+      // стена стартует от грани (findFaceHug).
+      if (degrees.get(nodeId) !== 1 || this.findAbutmentFacePx(nodeId, nodePx)) {
+        continue;
+      }
+      const dist = Math.hypot(pos.x - nodePx.x, pos.y - nodePx.y);
+      if (dist <= bestDist) {
+        bestDist = dist;
+        corner = { kind: 'corner', point: nodePx, nodeId };
+      }
+    }
+    if (corner && corner.kind === 'corner') {
+      return {
+        snap: corner,
+        ghostCenter: corner.point,
+        ghostRotationDeg: 0,
+        face: null,
+        endSector: this.endSectorAt(corner.nodeId),
+      };
+    }
+
+    const halfPx = cmToPx(this.wallThicknessCm) / 2;
+    const hug = findFaceHug(pos, this.wallBodies(), halfPx, 2 * halfPx + cmToPx(FACE_HUG_EXTRA_CM));
+    if (hug) {
+      return {
+        snap: { kind: 'face', point: hug.contact },
+        ghostCenter: hug.ghostCenter,
+        ghostRotationDeg: (Math.atan2(hug.tangent.y, hug.tangent.x) * 180) / Math.PI,
+        face: hug,
+        endSector: null,
+      };
+    }
+    return { snap: null, ghostCenter: pos, ghostRotationDeg: 0, face: null, endSector: null };
+  }
+
+  /**
+   * Направление продолжения свободного конца: от второго узла единственной
+   * стены к этому, единичный вектор — и перпендикуляр к нему. null, если
+   * стена вырождена (узлы совпадают).
+   */
+  private endSectorAt(nodeId: string): WallStartHit['endSector'] {
+    for (const wall of this.walls.values()) {
+      if (wall.startNodeId !== nodeId && wall.endNodeId !== nodeId) {
+        continue;
+      }
+      const otherId = wall.startNodeId === nodeId ? wall.endNodeId : wall.startNodeId;
+      const nodePx = this.nodePointPx(nodeId);
+      const otherPx = this.nodePointPx(otherId);
+      const length = Math.hypot(nodePx.x - otherPx.x, nodePx.y - otherPx.y);
+      if (length === 0) {
+        return null;
+      }
+      const forward = { x: (nodePx.x - otherPx.x) / length, y: (nodePx.y - otherPx.y) / length };
+      return { forward, side: { x: -forward.y, y: forward.x } };
+    }
+    return null;
+  }
+
   /**
    * Кратчайшее расстояние (px) от start вдоль направления (dirX, dirY) до
    * границы любой уже существующей стены, не дальше maxLengthPx. Не даёт
@@ -907,23 +1500,67 @@ export class FloorPlanCanvas {
    * стена, от которой мы уже оттолкнулись при старте, либо законная точка
    * примыкания в конце.
    *
-   * Порог игнорирования локально увеличивается до половины толщины СВОЕЙ
-   * стены для любого сегмента, чей узел (начальный или конечный) лежит
-   * рядом с точкой start луча, — т.е. рядом с тем углом, от которого
-   * оттолкнулась протяжка. В графовой модели в одном узле может сходиться
-   * больше одной стены, поэтому это не завязано на конкретный экземпляр
-   * стены, как раньше, а определяется по расстоянию до start.
+   * Стена, внутри тела которой начинается луч (старт в её узле или на её
+   * оси, см. rayStartRelation), препятствием не считается вовсе: из её тела
+   * луч обязан выйти, и под острым углом это происходит далеко от старта —
+   * прежний порог "полтолщины" такие стены обрезал или не давал создать.
+   * Луч вдоль такой стены (нахлёст) или с грани внутрь тела — отказ: длина 0.
    */
+  /** Луч из start лёг бы внахлёст на стену, из которой выходит, или ушёл бы с грани внутрь тела. */
+  private isRayStartBlocked(
+    start: WallEndpoint,
+    dirX: number,
+    dirY: number,
+    exclude?: ReadonlySet<string>,
+  ): boolean {
+    for (const wall of this.walls.values()) {
+      if (exclude?.has(wall.id)) {
+        continue;
+      }
+      const { startPx, endPx, thicknessPx } = this.segmentGeometryPx(wall);
+      const relation = rayStartRelation(
+        start,
+        { x: dirX, y: dirY },
+        startPx,
+        endPx,
+        thicknessPx / 2,
+        RAY_START_EPSILON_PX,
+      );
+      if (relation === 'overlaps' || relation === 'into-face') {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private findFirstWallCollisionTPx(
     start: WallEndpoint,
     dirX: number,
     dirY: number,
     maxLengthPx: number,
+    exclude?: ReadonlySet<string>,
   ): number | null {
+    if (this.isRayStartBlocked(start, dirX, dirY, exclude)) {
+      return 0;
+    }
     let bestT: number | null = null;
 
     for (const wall of this.walls.values()) {
+      if (exclude?.has(wall.id)) {
+        continue;
+      }
       const { startPx, endPx, thicknessPx, rotation } = this.segmentGeometryPx(wall);
+      const relation = rayStartRelation(
+        start,
+        { x: dirX, y: dirY },
+        startPx,
+        endPx,
+        thicknessPx / 2,
+        RAY_START_EPSILON_PX,
+      );
+      if (relation === 'inside') {
+        continue;
+      }
       const rad = (rotation * Math.PI) / 180;
       const wPerpX = -Math.sin(rad);
       const wPerpY = Math.cos(rad);
@@ -941,9 +1578,7 @@ export class FloorPlanCanvas {
         [c2, c4],
       ];
 
-      const nearOwnStart = Math.hypot(start.x - startPx.x, start.y - startPx.y) <= this.snapRadiusPx;
-      const nearOwnEnd = Math.hypot(start.x - endPx.x, start.y - endPx.y) <= this.snapRadiusPx;
-      const ignoreT = nearOwnStart || nearOwnEnd ? halfPx + 1 : this.collisionIgnoreRadiusPx;
+      const ignoreT = this.collisionIgnoreRadiusPx;
 
       for (const [a, b] of edges) {
         const hit = intersectRaySegment(start, dirX, dirY, a, b);
@@ -982,19 +1617,113 @@ export class FloorPlanCanvas {
     start: WallEndpoint,
     rawPos: WallEndpoint,
     event: Konva.KonvaEventObject<MouseEvent | TouchEvent>,
-  ): { lengthPx: number; angleDeg: number; snap: WallSnap | null; snappedGuideDeg: number | null } {
-    const positionSnap = this.findWallSnapPx(rawPos);
+    forcedAngleDeg?: number,
+    forwardFace?: FaceHug,
+    endSector?: WallStartHit['endSector'],
+  ): WallEndResolution {
+    if (forcedAngleDeg !== undefined) {
+      // Параллельно грани: угол задан режимом протяжки, а привязки конца к
+      // узлам/граням его бы сломали — остаётся только обрезка столкновением.
+      // Стена, упёршаяся в чужую грань, получит торец по этой грани сама
+      // (findAbutmentFacePx).
+      const forcedRad = (forcedAngleDeg * Math.PI) / 180;
+      const forcedX = Math.cos(forcedRad);
+      const forcedY = Math.sin(forcedRad);
+      const along = Math.max(0, (rawPos.x - start.x) * forcedX + (rawPos.y - start.y) * forcedY);
+      const hitT = this.findFirstWallCollisionTPx(start, forcedX, forcedY, along);
+      return { lengthPx: hitT ?? along, angleDeg: forcedAngleDeg, snap: null, snappedGuideDeg: null };
+    }
+
+    let positionSnap = this.findWallSnapPx(rawPos);
+    // От грани "вперёд" конец привязывается к узлу/грани, только если эта
+    // точка лежит в допустимом секторе ±45° от нормали (RemPlanner).
+    if (
+      positionSnap &&
+      forwardFace &&
+      !isInForwardSector(
+        { x: positionSnap.point.x - start.x, y: positionSnap.point.y - start.y },
+        forwardFace.normal,
+        forwardFace.tangent,
+      )
+    ) {
+      positionSnap = null;
+    }
+    // От торца — то же для сектора ±135°: привязка к точке в запретной зоне
+    // позади торца отменяется.
+    if (
+      positionSnap &&
+      endSector &&
+      !isInSector(
+        { x: positionSnap.point.x - start.x, y: positionSnap.point.y - start.y },
+        endSector.forward,
+        endSector.side,
+        END_SECTOR_LIMIT_DEG,
+      )
+    ) {
+      positionSnap = null;
+    }
+
+    // Привязка к оси (угловая направляющая) сильнее магнита к грани/оси стены:
+    // иначе у стены направление сбрасывалось бы со своей оси. Тогда конец
+    // доходит до стены вдоль направляющей (см. обрезку ниже). Узел остаётся
+    // целью, если лежит на оси.
+    if (positionSnap && !(event.evt as MouseEvent).shiftKey) {
+      const rel = { x: rawPos.x - start.x, y: rawPos.y - start.y };
+      const tol = cmToPx(GUIDE_SNAP_TOLERANCE_CM);
+      const axisGuide = forwardFace
+        ? faceForwardGeometry(rel, forwardFace.normal, forwardFace.tangent, tol, true).snappedLineDeg
+        : endSector
+          ? endSectorGeometry(rel, endSector.forward, endSector.side, tol, true).snappedLineDeg
+          : this.computeWallGeometryPx(start, rawPos, event).snappedGuideDeg;
+      if (axisGuide !== null) {
+        // Узел остаётся целью, только если лежит на самой оси; иначе конец
+        // идёт по оси, а не уводится в сторону к узлу.
+        const guideRad = (axisGuide * Math.PI) / 180;
+        const nodeOffAxis =
+          positionSnap.kind === 'corner' &&
+          Math.abs(
+            (positionSnap.point.x - start.x) * Math.sin(guideRad) -
+              (positionSnap.point.y - start.y) * Math.cos(guideRad),
+          ) > RAY_START_EPSILON_PX * 2;
+        if (positionSnap.kind !== 'corner' || nodeOffAxis) {
+          positionSnap = null;
+        }
+      }
+    }
 
     let lengthPx: number;
     let angleDeg: number;
     let snap: WallSnap | null = positionSnap;
     let snappedGuideDeg: number | null = null;
+    let align: AlignResult | undefined;
 
     if (positionSnap) {
       const dx = positionSnap.point.x - start.x;
       const dy = positionSnap.point.y - start.y;
       lengthPx = Math.hypot(dx, dy);
       angleDeg = (Math.atan2(dy, dx) * 180) / Math.PI;
+    } else if (forwardFace) {
+      const geometry = faceForwardGeometry(
+        { x: rawPos.x - start.x, y: rawPos.y - start.y },
+        forwardFace.normal,
+        forwardFace.tangent,
+        cmToPx(GUIDE_SNAP_TOLERANCE_CM),
+        !(event.evt as MouseEvent).shiftKey,
+      );
+      lengthPx = geometry.lengthPx;
+      angleDeg = geometry.angleDeg;
+      snappedGuideDeg = geometry.snappedLineDeg;
+    } else if (endSector) {
+      const geometry = endSectorGeometry(
+        { x: rawPos.x - start.x, y: rawPos.y - start.y },
+        endSector.forward,
+        endSector.side,
+        cmToPx(GUIDE_SNAP_TOLERANCE_CM),
+        !(event.evt as MouseEvent).shiftKey,
+      );
+      lengthPx = geometry.lengthPx;
+      angleDeg = geometry.angleDeg;
+      snappedGuideDeg = geometry.snappedLineDeg;
     } else {
       const geometry = this.computeWallGeometryPx(start, rawPos, event);
       lengthPx = geometry.lengthPx;
@@ -1002,18 +1731,41 @@ export class FloorPlanCanvas {
       snappedGuideDeg = geometry.snappedGuideDeg;
     }
 
-    if (positionSnap?.kind === 'axis') {
-      return { lengthPx, angleDeg, snap, snappedGuideDeg };
+    if (!positionSnap && !(event.evt as MouseEvent).shiftKey) {
+      const hit = this.alignWallEnd(start, lengthPx, angleDeg, snappedGuideDeg !== null);
+      const rel = hit ? { x: hit.point.x - start.x, y: hit.point.y - start.y } : null;
+      // От грани/торца выровненный конец не должен вылезти из допустимого сектора.
+      const allowed =
+        rel !== null &&
+        (!forwardFace || isInForwardSector(rel, forwardFace.normal, forwardFace.tangent)) &&
+        (!endSector || isInSector(rel, endSector.forward, endSector.side, END_SECTOR_LIMIT_DEG));
+      if (hit && rel && allowed) {
+        align = hit;
+        lengthPx = Math.hypot(rel.x, rel.y);
+        if (snappedGuideDeg === null) {
+          angleDeg = (Math.atan2(rel.y, rel.x) * 180) / Math.PI;
+        }
+      }
     }
 
     const rad = (angleDeg * Math.PI) / 180;
     const dirX = Math.cos(rad);
     const dirY = Math.sin(rad);
 
+    if (positionSnap?.kind === 'axis') {
+      // Проверку столкновений здесь пропускаем (см. выше), но нахлёст на
+      // стену, из которой стартуем, — нет: иначе стена от конца назад по
+      // самой себе привязывалась к собственной оси и ложилась поверх.
+      if (this.isRayStartBlocked(start, dirX, dirY)) {
+        return { lengthPx: 0, angleDeg, snap: null, snappedGuideDeg: null };
+      }
+      return { lengthPx, angleDeg, snap, snappedGuideDeg };
+    }
+
     const collisionT = this.findFirstWallCollisionTPx(start, dirX, dirY, lengthPx);
     if (collisionT !== null) {
       const roughPoint = { x: start.x + dirX * collisionT, y: start.y + dirY * collisionT };
-      const collisionSnap = this.findWallSnapPx(roughPoint);
+      const collisionSnap = snappedGuideDeg === null ? this.findWallSnapPx(roughPoint) : null;
       if (collisionSnap) {
         const dx = collisionSnap.point.x - start.x;
         const dy = collisionSnap.point.y - start.y;
@@ -1024,10 +1776,13 @@ export class FloorPlanCanvas {
         lengthPx = collisionT;
         snap = null;
       }
-      snappedGuideDeg = null;
+      if (collisionSnap) {
+        snappedGuideDeg = null;
+      }
+      align = undefined;
     }
 
-    return { lengthPx, angleDeg, snap, snappedGuideDeg };
+    return { lengthPx, angleDeg, snap, snappedGuideDeg, align };
   }
 
   getWorkspace(id: string): Workspace | undefined {
@@ -1052,6 +1807,8 @@ export class FloorPlanCanvas {
     this.selectedWallThicknessSnapshotTaken = false;
     this.transformer.nodes([workspace.group]);
     this.transformer.getLayer()?.batchDraw();
+    this.updateWallControls();
+    this.emitSelectionChange();
   }
 
   private selectWall(wall: Wall): void {
@@ -1062,6 +1819,8 @@ export class FloorPlanCanvas {
     wall.setSelected(true);
     this.transformer.getLayer()?.batchDraw();
     this.structureLayer.batchDraw();
+    this.updateWallControls();
+    this.emitSelectionChange();
   }
 
   private clearWallSelectionHighlight(): void {
@@ -1077,6 +1836,8 @@ export class FloorPlanCanvas {
     this.transformer.nodes([]);
     this.transformer.getLayer()?.batchDraw();
     this.structureLayer.batchDraw();
+    this.updateWallControls();
+    this.emitSelectionChange();
   }
 
   /** Удаляет выделенный объект (стену или рабочее место). Ничего не делает, если ничего не выделено. */
@@ -1088,7 +1849,7 @@ export class FloorPlanCanvas {
 
     const wall = this.walls.get(this.selectedId);
     if (wall) {
-      wall.line.destroy();
+      wall.destroy();
       this.walls.delete(this.selectedId);
       this.pruneOrphanNodes();
       this.rebuildWallGeometry();
@@ -1155,7 +1916,7 @@ export class FloorPlanCanvas {
     this.isRestoring = true;
 
     this.deselect();
-    this.walls.forEach((wall) => wall.line.destroy());
+    this.walls.forEach((wall) => wall.destroy());
     this.walls.clear();
     this.nodes.clear();
     this.workspaces.forEach((workspace) => workspace.group.destroy());
@@ -1224,10 +1985,18 @@ export class FloorPlanCanvas {
     if (!pointerPos) {
       return;
     }
-    const startSnap = this.findWallSnapPx(pointerPos);
-    const pos = startSnap?.point ?? pointerPos;
-    this.wallDrawStartSnap = startSnap;
-    this.updateWallGhost(null);
+    const startHit = this.findWallStartSnapPx(pointerPos);
+    const pos = startHit.snap?.point ?? pointerPos;
+    this.wallDrawStartSnap = startHit.snap;
+    this.wallDrawFace = startHit.face;
+    this.wallDrawMode = 'none';
+    // Призрак при нажатии не пропадает: на свободной точке и у конца другой
+    // стены он остаётся на месте, пока курсор не вышел из его квадрата, и
+    // только тогда уступает место вытягиваемой стене (см. handleWallDrawMove).
+    // От грани его заменяет штырь ровно по его контуру.
+    if (startHit.face) {
+      this.updateWallGhost(null);
+    }
 
     const thicknessPx = cmToPx(this.wallThicknessCm);
     const scale = this.stage.scaleX();
@@ -1241,7 +2010,28 @@ export class FloorPlanCanvas {
       fill: 'rgba(76, 175, 80, 0.15)',
       listening: false,
     });
-    this.guideLines = GUIDE_LINE_ANGLES_DEG.map((angleDeg) => {
+    this.wallDrawEndSector = startHit.endSector;
+    this.guideAnglesDeg = startHit.face
+      ? faceGuideLinesDeg(startHit.face.normal, startHit.face.tangent)
+      : startHit.endSector
+        ? endGuideLinesDeg(startHit.endSector.forward)
+        : GUIDE_LINE_ANGLES_DEG;
+    if (startHit.endSector) {
+      // Запретный сектор позади торца (90° вдоль самой стены) — красным, как у RemPlanner.
+      const { forward } = startHit.endSector;
+      const baseDeg = (Math.atan2(forward.y, forward.x) * 180) / Math.PI;
+      this.forbiddenWedge = new Konva.Wedge({
+        x: pos.x,
+        y: pos.y,
+        radius: (GUIDE_HIGHLIGHT_RADIUS_PX * 1.4) / scale,
+        angle: 360 - 2 * END_SECTOR_LIMIT_DEG,
+        rotation: baseDeg + END_SECTOR_LIMIT_DEG,
+        fill: 'rgba(220, 53, 69, 0.22)',
+        listening: false,
+      });
+      this.structureLayer.add(this.forbiddenWedge);
+    }
+    this.guideLines = this.guideAnglesDeg.map((angleDeg) => {
       const rad = (angleDeg * Math.PI) / 180;
       const guideLength = GUIDE_LINE_LENGTH_PX / scale;
       const dx = Math.cos(rad) * guideLength;
@@ -1257,13 +2047,18 @@ export class FloorPlanCanvas {
     });
     this.structureLayer.add(this.guideHighlight, ...this.guideLines);
 
+    // От грани стена появляется сразу — штырём по контуру призрака (как у
+    // RemPlanner), и тянется за курсором внутри квадрата.
+    const stubAngleDeg = startHit.face
+      ? (Math.atan2(startHit.face.normal.y, startHit.face.normal.x) * 180) / Math.PI
+      : 0;
     this.wallPreview = new Konva.Rect({
       x: pos.x,
       y: pos.y,
       width: 0,
       height: thicknessPx,
       offsetY: thicknessPx / 2,
-      rotation: 0,
+      rotation: stubAngleDeg,
       fillPatternImage: getWallHatchPattern(),
       fillPatternRepeat: 'repeat',
       stroke: '#3a3a3a',
@@ -1284,6 +2079,36 @@ export class FloorPlanCanvas {
       listening: false,
     });
     this.structureLayer.add(this.wallPreview, this.wallLengthLabel, this.wallThicknessLabel);
+    if (startHit.face) {
+      // Штырь: от грани, длиной в толщину — ровно квадрат призрака.
+      this.renderWallPreview(thicknessPx, stubAngleDeg);
+      this.updateWallDimensionLabels(pos, thicknessPx, stubAngleDeg, thicknessPx);
+    } else {
+      this.renderWallPreview(0, 0);
+    }
+    this.structureLayer.batchDraw();
+  }
+
+  /**
+   * Превью — прямоугольник от узла начала по оси на заданные длину и угол,
+   * без выступов за узлы: стена заканчивается там, где её начали и закончили,
+   * и после отпускания не "дорастает". Заодно запоминает ось — конец стены
+   * берётся из неё.
+   */
+  private renderWallPreview(axisLengthPx: number, angleDeg: number): void {
+    if (!this.wallPreview || !this.wallDrawStart) {
+      return;
+    }
+    const thicknessPx = cmToPx(this.wallThicknessCm);
+    this.wallPreview.setAttrs({
+      x: this.wallDrawStart.x,
+      y: this.wallDrawStart.y,
+      width: axisLengthPx,
+      height: thicknessPx,
+      offsetY: thicknessPx / 2,
+      rotation: angleDeg,
+    });
+    this.wallDrawAxis = { lengthPx: axisLengthPx, angleDeg };
   }
 
   private handleWallDrawMove(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
@@ -1299,9 +2124,9 @@ export class FloorPlanCanvas {
     // или середина существующей стены).
     if (!this.wallDrawStart || !this.wallPreview) {
       if (this.mode === 'draw-wall') {
-        const hoverSnap = this.findWallSnapPx(pos);
-        this.updateWallGhost(hoverSnap?.point ?? pos);
-        this.updateWallSnapIndicator(hoverSnap);
+        const hit = this.findWallStartSnapPx(pos);
+        this.updateWallGhost({ center: hit.ghostCenter, rotationDeg: hit.ghostRotationDeg });
+        this.updateWallSnapIndicator(hit.snap);
         this.structureLayer.batchDraw();
       }
       return;
@@ -1309,28 +2134,100 @@ export class FloorPlanCanvas {
 
     const thicknessPx = cmToPx(this.wallThicknessCm);
 
+    // Старт от грани чужой стены (правила RemPlanner, см. nextDrawMode):
+    //  - внутри квадрата призрака — штырь по нормали, тянется за курсором;
+    //  - вышли за его полосу — "вперёд" под углом не положе 45° к нормали;
+    //  - вышли вбок по полосе — "вдоль грани": стена параллельна хозяину и
+    //    прижата к нему, её начало сдвигается с точки контакта на центр призрака.
+    let forcedAngleDeg: number | undefined;
+    let stub: WallEndResolution | null = null;
+    const face = this.wallDrawFace;
+    if (face) {
+      const relX = pos.x - face.contact.x;
+      const relY = pos.y - face.contact.y;
+      const outward = relX * face.normal.x + relY * face.normal.y;
+      const alongFace = relX * face.tangent.x + relY * face.tangent.y;
+      this.wallDrawMode = nextDrawMode(this.wallDrawMode, outward, alongFace, thicknessPx);
+      const desiredStart = this.wallDrawMode === 'parallel' ? face.ghostCenter : face.contact;
+      if (desiredStart.x !== this.wallDrawStart.x || desiredStart.y !== this.wallDrawStart.y) {
+        this.moveWallDrawStart(desiredStart);
+      }
+      if (this.wallDrawMode === 'parallel') {
+        const direction = alongFace >= 0 ? 1 : -1;
+        forcedAngleDeg =
+          (Math.atan2(face.tangent.y * direction, face.tangent.x * direction) * 180) / Math.PI;
+      } else if (this.wallDrawMode === 'none') {
+        stub = {
+          lengthPx: Math.min(thicknessPx, Math.max(thicknessPx * FACE_STUB_MIN_FRACTION, outward)),
+          angleDeg: (Math.atan2(face.normal.y, face.normal.x) * 180) / Math.PI,
+          snap: null,
+          snappedGuideDeg: null,
+        };
+      }
+    }
+
     // Примагничивание к узлу/грани соседней стены и обрезка при столкновении
     // с уже существующей стеной — общая логика, см. resolveWallEnd. Делаем
     // это здесь же, во время протяжки, а не только при отпускании кнопки —
     // иначе пользователь не увидит, что стена уже уткнулась в препятствие.
-    const { lengthPx, angleDeg, snap, snappedGuideDeg } = this.resolveWallEnd(
-      this.wallDrawStart,
-      pos,
-      event,
-    );
+    // Свободный старт и старт у конца стены: пока курсор не вышел из квадрата
+    // призрака, превью так и остаётся квадратом — ни поворота к ближайшей
+    // направляющей, ни привязок от лёгкого дрожания мыши сразу после нажатия.
+    const halfPx = thicknessPx / 2;
+    const insideStartSquare =
+      !face &&
+      Math.hypot(pos.x - this.wallDrawStart.x, pos.y - this.wallDrawStart.y) < halfPx;
+    const resolved: WallEndResolution =
+      stub ??
+      (insideStartSquare
+        ? {
+            lengthPx: 0,
+            angleDeg: this.wallDrawAxis.angleDeg,
+            snap: null,
+            snappedGuideDeg: null,
+          }
+        : this.resolveWallEnd(
+            this.wallDrawStart,
+            pos,
+            event,
+            forcedAngleDeg,
+            this.wallDrawMode === 'forward' ? (face ?? undefined) : undefined,
+            this.wallDrawEndSector,
+          ));
+    const { lengthPx, angleDeg, snap, snappedGuideDeg } = resolved;
     this.wallDrawEndSnap = snap;
 
-    this.wallPreview.setAttrs({
-      width: lengthPx,
-      height: thicknessPx,
-      offsetY: thicknessPx / 2,
-      rotation: angleDeg,
-    });
+    // Призрак не пропадает при нажатии: пока курсор внутри квадрата старта
+    // (свободная точка или конец другой стены), он стоит на месте, а стена
+    // нулевой длины ещё не видна; как только курсор вышел — призрак уступает
+    // место вытягиваемой стене.
+    if (!face && !insideStartSquare) {
+      this.updateWallGhost(null);
+    }
+    this.renderWallPreview(lengthPx, angleDeg);
 
     this.updateWallDimensionLabels(this.wallDrawStart, lengthPx, angleDeg, thicknessPx);
     this.updateGuideHighlight(snappedGuideDeg);
+    this.renderAlignGuides(resolved.align);
     this.updateWallSnapIndicator(snap);
     this.structureLayer.batchDraw();
+  }
+
+  /**
+   * Переносит начало рисуемой стены (превью, подсветку и направляющие) — при
+   * старте от грани оно переезжает между точкой контакта и центром призрака,
+   * когда протяжка выбирает режим «вдоль грани» или возвращается к старту.
+   */
+  private moveWallDrawStart(pos: WallEndpoint): void {
+    this.wallDrawStart = pos;
+    const guideLength = GUIDE_LINE_LENGTH_PX / this.stage.scaleX();
+    this.guideHighlight?.position(pos);
+    this.guideAnglesDeg.forEach((angleDeg, index) => {
+      const rad = (angleDeg * Math.PI) / 180;
+      const dx = Math.cos(rad) * guideLength;
+      const dy = Math.sin(rad) * guideLength;
+      this.guideLines[index]?.points([pos.x - dx, pos.y - dy, pos.x + dx, pos.y + dy]);
+    });
   }
 
   /**
@@ -1351,10 +2248,18 @@ export class FloorPlanCanvas {
     this.guideHighlight = null;
     this.guideLines.forEach((line) => line.destroy());
     this.guideLines = [];
+    this.forbiddenWedge?.destroy();
+    this.forbiddenWedge = null;
+    this.renderAlignGuides(undefined);
+    this.wallDrawEndSector = null;
     this.updateWallSnapIndicator(null);
+    this.wallDrawAxis = { lengthPx: 0, angleDeg: 0 };
     this.wallDrawStart = null;
     this.wallDrawStartSnap = null;
     this.wallDrawEndSnap = null;
+    this.wallDrawFace = null;
+    this.wallDrawMode = 'none';
+    this.guideAnglesDeg = GUIDE_LINE_ANGLES_DEG;
   }
 
   private handleWallDrawEnd(): void {
@@ -1363,8 +2268,10 @@ export class FloorPlanCanvas {
     }
 
     const start = this.wallDrawStart;
-    const lengthPx = this.wallPreview.width();
-    const rotation = this.wallPreview.rotation();
+    const { lengthPx, angleDeg: rotation } = this.wallDrawAxis;
+    // Штырь, отпущенный внутри квадрата призрака, — законная короткая стена
+    // (как у RemPlanner), для него порог минимальной длины не действует.
+    const isFaceStub = this.wallDrawFace !== null && this.wallDrawMode === 'none';
 
     // Точка конца уже была примагничена вживую в handleWallDrawMove — здесь
     // просто забираем итоговый результат, чтобы не пересчитывать и не
@@ -1374,7 +2281,7 @@ export class FloorPlanCanvas {
 
     this.clearWallDrawingVisuals();
 
-    if (pxToCm(lengthPx) < WALL_DRAW_MIN_LENGTH_CM) {
+    if (!isFaceStub && pxToCm(lengthPx) < WALL_DRAW_MIN_LENGTH_CM) {
       this.structureLayer.batchDraw();
       return;
     }
@@ -1386,6 +2293,96 @@ export class FloorPlanCanvas {
     };
 
     this.finishWallDraw(start, endPointPx, startSnap, endSnap, this.wallThicknessCm);
+  }
+
+  /** Линии-ориентиры от узлов и свободных концов уже нарисованных стен, кроме проходящих через саму точку старта. */
+  private alignWallEnd(
+    start: WallEndpoint,
+    lengthPx: number,
+    angleDeg: number,
+    angleSnapped: boolean,
+  ): AlignResult | undefined {
+    const nodes = [...this.nodes.values()].map((n) => ({ id: n.id, x: cmToPx(n.x), y: cmToPx(n.y) }));
+    const edges = [...this.walls.values()].map((w) => ({ startNodeId: w.startNodeId, endNodeId: w.endNodeId }));
+    const lines = alignmentLines(nodes, edges).filter(
+      (line) => Math.hypot(line.origin.x - start.x, line.origin.y - start.y) > RAY_START_EPSILON_PX,
+    );
+    const rad = (angleDeg * Math.PI) / 180;
+    const dir = { x: Math.cos(rad), y: Math.sin(rad) };
+    const end = { x: start.x + dir.x * lengthPx, y: start.y + dir.y * lengthPx };
+    return (
+      snapToAlignment(end, lines, cmToPx(ALIGN_SNAP_TOLERANCE_CM), angleSnapped ? { origin: start, dir } : undefined) ??
+      undefined
+    );
+  }
+
+  /** Пунктир выравнивания: от узла-источника до притянутой точки конца. */
+  private renderAlignGuides(align: AlignResult | undefined): void {
+    this.alignGuideNodes.forEach((node) => node.destroy());
+    this.alignGuideNodes = [];
+    if (!align) {
+      return;
+    }
+    const scale = this.stage.scaleX();
+    for (const line of align.lines) {
+      const along =
+        (align.point.x - line.origin.x) * line.dir.x + (align.point.y - line.origin.y) * line.dir.y;
+      const overshoot = (along >= 0 ? 1 : -1) * (12 / scale);
+      this.alignGuideNodes.push(
+        new Konva.Line({
+          points: [
+            line.origin.x,
+            line.origin.y,
+            align.point.x + line.dir.x * overshoot,
+            align.point.y + line.dir.y * overshoot,
+          ],
+          stroke: 'rgba(33, 150, 243, 0.9)',
+          strokeWidth: 1 / scale,
+          dash: [6 / scale, 4 / scale],
+          listening: false,
+        }),
+        new Konva.Circle({
+          x: line.origin.x,
+          y: line.origin.y,
+          radius: 4 / scale,
+          fill: 'rgba(33, 150, 243, 0.9)',
+          listening: false,
+        }),
+      );
+    }
+    this.structureLayer.add(...this.alignGuideNodes);
+  }
+
+  /** Заливка и площадь замкнутых помещений (под стенами, по внутренним граням). */
+  private renderRooms(scale: number): void {
+    this.roomGroup.destroyChildren();
+    const nodes = [...this.nodes.values()].map((n) => ({ id: n.id, x: cmToPx(n.x), y: cmToPx(n.y) }));
+    const edges = [...this.walls.values()].map((w) => ({
+      startNodeId: w.startNodeId,
+      endNodeId: w.endNodeId,
+      thickness: cmToPx(w.thicknessCm),
+    }));
+    for (const room of findRooms(nodes, edges)) {
+      this.roomGroup.add(
+        new Konva.Line({
+          points: room.polygon.flatMap((p) => [p.x, p.y]),
+          closed: true,
+          fill: 'rgba(76, 175, 80, 0.12)',
+          listening: false,
+        }),
+      );
+      const areaM2 = room.area / (PIXELS_PER_CM * PIXELS_PER_CM) / 10000;
+      const label = new Konva.Text({
+        text: `${areaM2.toFixed(2)} м²`,
+        fontSize: 14 / scale,
+        fill: '#2e7d32',
+        listening: false,
+      });
+      const c = polygonCentroid(room.polygon);
+      label.position({ x: c.x - label.width() / 2, y: c.y - label.height() / 2 });
+      this.roomGroup.add(label);
+    }
+    this.backgroundLayer.batchDraw();
   }
 
   /**
@@ -1438,9 +2435,14 @@ export class FloorPlanCanvas {
       snappedGuideDeg !== null ? 'rgba(76, 175, 80, 0.28)' : 'rgba(76, 175, 80, 0.15)',
     );
 
-    GUIDE_LINE_ANGLES_DEG.forEach((guideAngle, index) => {
+    this.guideAnglesDeg.forEach((guideAngle, index) => {
       const line = this.guideLines[index];
-      const isActive = snappedGuideDeg === guideAngle;
+      if (!line) {
+        return;
+      }
+      // Направляющая — прямая, 0° и 180° одна и та же линия.
+      const difference = (((snappedGuideDeg ?? 0) - guideAngle) % 180 + 180) % 180;
+      const isActive = snappedGuideDeg !== null && (difference < 1e-6 || 180 - difference < 1e-6);
       line.stroke(isActive ? '#2e7d32' : '#57c15c');
       line.strokeWidth(isActive ? 1.5 : 1);
       line.opacity(isActive ? 0.9 : 0.4);
@@ -1473,13 +2475,14 @@ export class FloorPlanCanvas {
   }
 
   /**
-   * "Призрак" — квадрат сечения стены (толщина × толщина) под курсором в
-   * режиме рисования до начала протяжки. Показывает, с какой толщиной и
-   * в какой именно точке начнётся стена, если кликнуть прямо сейчас —
-   * центр призрака совпадает с точкой примагничивания, когда она есть.
+   * "Призрак" — квадрат сечения стены (толщина × толщина) в режиме рисования
+   * до начала протяжки. Показывает, с какой толщиной и где начнётся стена,
+   * если кликнуть прямо сейчас: у узла — по центру узла, у стены — вплотную
+   * к её грани снаружи и повёрнутым вдоль грани (в тело стены призрак не
+   * заходит, см. findWallStartSnapPx).
    */
-  private updateWallGhost(point: WallEndpoint | null): void {
-    if (!point) {
+  private updateWallGhost(ghost: { center: WallEndpoint; rotationDeg: number } | null): void {
+    if (!ghost) {
       this.wallGhost?.destroy();
       this.wallGhost = null;
       return;
@@ -1505,8 +2508,9 @@ export class FloorPlanCanvas {
       height: sizePx,
       offsetX: sizePx / 2,
       offsetY: sizePx / 2,
-      x: point.x,
-      y: point.y,
+      x: ghost.center.x,
+      y: ghost.center.y,
+      rotation: ghost.rotationDeg,
     });
     this.wallGhost.moveToTop();
   }
