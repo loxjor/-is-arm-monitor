@@ -1,5 +1,6 @@
 import Konva from 'konva';
 import { Workspace } from './Workspace';
+import { DeskSelection } from './DeskSelection';
 import { Wall } from './Wall';
 import { WallControls, type WallEnd } from './WallControls';
 import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
@@ -51,7 +52,9 @@ export type CanvasMode = 'select' | 'draw-wall' | 'view' | 'place-desk';
 export const DESK_PLACEMENT_SIZE_CM = { width: 120, height: 60 } as const;
 const DESK_GRID_SNAP_CM = 10;
 // Поворот стола рамкой Transformer — с привязкой к шагу 45° (rotationSnapStep в workplace-map).
-const DESK_ROTATION_SNAPS = [0, 45, 90, 135, 180, 225, 270, 315];
+const DESK_ROTATION_SNAP_DEG = 45;
+const DESK_SWEEP_STEP_PX = 2;
+const DESK_SWEEP_STEP_DEG = 2;
 
 /** То, что тулбар показывает про выделенную стену. */
 export interface SelectedWallInfo {
@@ -191,7 +194,7 @@ export class FloorPlanCanvas {
   private dimensionLayer: Konva.Layer;
   private mainLayer: Konva.Layer;
   private controlsLayer: Konva.Layer;
-  private transformer: Konva.Transformer;
+  private deskSelection: DeskSelection;
   private wallControls: WallControls;
   private onSelectionChange: ((wall: SelectedWallInfo | null) => void) | null = null;
   // Перетаскивание ручки конца выделенной стены: какой узел тянем и к какому
@@ -287,28 +290,12 @@ export class FloorPlanCanvas {
     });
     this.controlsLayer.add(this.wallControls.group);
 
-    this.transformer = new Konva.Transformer({
-      rotateEnabled: true,
-      rotationSnaps: DESK_ROTATION_SNAPS,
-      rotationSnapTolerance: 10,
-      enabledAnchors: [
-        'top-left',
-        'top-center',
-        'top-right',
-        'middle-left',
-        'middle-right',
-        'bottom-left',
-        'bottom-center',
-        'bottom-right',
-      ],
-      boundBoxFunc: (oldBox, newBox) => {
-        const minSize = 20;
-        if (newBox.width < minSize || newBox.height < minSize) {
-          return oldBox;
-        }
-        return newBox;
-      },
+    this.deskSelection = new DeskSelection(this.stage, {
+      onStart: () => this.pushUndoSnapshot(),
+      onRotate: (workspace, angle) => this.rotateDeskTo(workspace, angle),
+      onEnd: (workspace) => this.finishDeskRotation(workspace),
     });
+    this.controlsLayer.add(this.deskSelection.group);
 
     this.backgroundLayer.add(this.roomGroup);
     this.stage.add(this.gridLayer);
@@ -317,12 +304,13 @@ export class FloorPlanCanvas {
     this.stage.add(this.dimensionLayer);
     this.stage.add(this.mainLayer);
     this.stage.add(this.controlsLayer);
-    this.mainLayer.add(this.transformer);
 
     this.drawGrid();
 
     this.stage.on('click tap', (event) => {
-      if (event.target === this.stage) {
+      // Konva шлёт click при отпускании ручки поворота над пустой сценой — раньше,
+      // чем поворот завершится (window mouseup), и выделение не должно слететь.
+      if (event.target === this.stage && !this.deskSelection.isRotating) {
         this.deselect();
       }
     });
@@ -448,6 +436,7 @@ export class FloorPlanCanvas {
     this.gridMinorRect?.visible(scale > GRID_MINOR_VISIBLE_ABOVE_SCALE);
     this.gridLayer.batchDraw();
     this.renderWallOverlays();
+    this.deskSelection.setScale(scale);
     this.onScaleChange?.(scale);
   }
 
@@ -616,7 +605,7 @@ export class FloorPlanCanvas {
     // недостижимой для клика после переключения в "Выбор": последняя
     // перерисовка слоя случилась ДО того, как он стал listening, и её hit-
     // canvas так и не узнал о новых фигурах. deselect() выше уже
-    // перерисовывает mainLayer (transformer.getLayer()), поэтому у
+    // перерисовывает mainLayer (mainLayer), поэтому у
     // рабочих мест этот баг не проявлялся — только у стен.
     this.structureLayer.batchDraw();
 
@@ -798,23 +787,62 @@ export class FloorPlanCanvas {
 
     const workspace = new Workspace(data, (selected) => this.selectWorkspace(selected));
     workspace.setDraggable(this.mode === 'select');
-    workspace.group.on('dragstart transformstart', () => this.pushUndoSnapshot());
-    // Как в CursorTool workplace-map: пока тащат на занятое место — красная
-    // обводка; отпустили там — стол возвращается туда, откуда его взяли
-    // (снимок для отмены сделан на dragstart/transformstart).
-    workspace.group.on('dragmove transform', () => {
-      workspace.setColliding(this.deskCollides(workspace.cornersPx(), workspace.id));
+    // Как в CursorTool workplace-map: стол «упирается» в стену или соседа и
+    // остаётся на последней свободной позиции, а не отскакивает после отпускания.
+    let lastValid = workspace.group.position();
+    workspace.group.on('dragstart', () => {
+      this.pushUndoSnapshot();
+      lastValid = workspace.group.position();
+      if (this.deskSelection.selected !== workspace) this.selectWorkspace(workspace);
     });
-    workspace.group.on('dragend transformend', () => {
-      const blocked = this.deskCollides(workspace.cornersPx(), workspace.id);
-      workspace.setColliding(false);
-      if (blocked) this.undo();
+    workspace.group.on('dragmove', () => {
+      const target = workspace.group.position();
+      // Идём от последней свободной точки к курсору мелкими шагами: при резком
+      // рывке мыши иначе стол перепрыгнул бы тонкую стену за один dragmove.
+      const steps = Math.max(1, Math.ceil(Math.hypot(target.x - lastValid.x, target.y - lastValid.y) / DESK_SWEEP_STEP_PX));
+      for (let i = 1; i <= steps; i += 1) {
+        const t = i / steps;
+        workspace.group.position({ x: lastValid.x + (target.x - lastValid.x) * t, y: lastValid.y + (target.y - lastValid.y) * t });
+        if (this.deskCollides(workspace.cornersPx(), workspace.id)) {
+          workspace.group.position({
+            x: lastValid.x + (target.x - lastValid.x) * ((i - 1) / steps),
+            y: lastValid.y + (target.y - lastValid.y) * ((i - 1) / steps),
+          });
+          break;
+        }
+      }
+      lastValid = workspace.group.position();
+      this.deskSelection.update();
     });
     this.mainLayer.add(workspace.group);
     this.workspaces.set(data.id, workspace);
-    this.transformer.moveToTop();
     this.mainLayer.batchDraw();
     return workspace;
+  }
+
+  /** Поворот ручкой: на занятое место стол не встаёт — остаётся прежний угол. */
+  private rotateDeskTo(workspace: Workspace, angleDeg: number): number {
+    const start = workspace.group.rotation();
+    // Кратчайшая дуга до нужного угла, по шагам — чтобы угол стола не «перескочил» соседа.
+    const delta = ((((angleDeg - start) % 360) + 540) % 360) - 180;
+    const steps = Math.max(1, Math.ceil(Math.abs(delta) / DESK_SWEEP_STEP_DEG));
+    for (let i = 1; i <= steps; i += 1) {
+      workspace.rotateAroundCenter(start + (delta * i) / steps);
+      if (this.deskCollides(workspace.cornersPx(), workspace.id)) {
+        workspace.rotateAroundCenter(start + (delta * (i - 1)) / steps);
+        break;
+      }
+    }
+    workspace.rotateAroundCenter(((workspace.group.rotation() % 360) + 360) % 360);
+    this.mainLayer.batchDraw();
+    return workspace.group.rotation();
+  }
+
+  /** Доводка к ближайшим 45° после отпускания ручки (при включённых магнитах), если там свободно. */
+  private finishDeskRotation(workspace: Workspace): void {
+    if (!this.snapEnabled) return;
+    const snapped = (Math.round(workspace.group.rotation() / DESK_ROTATION_SNAP_DEG) * DESK_ROTATION_SNAP_DEG) % 360;
+    this.rotateDeskTo(workspace, snapped);
   }
 
   private nodePointPx(nodeId: string): WallEndpoint {
@@ -871,7 +899,6 @@ export class FloorPlanCanvas {
     this.structureLayer.add(wall.line);
     this.dimensionLayer.add(wall.dimensionGroup);
     this.walls.set(segment.id, wall);
-    this.transformer.moveToTop();
     return wall;
   }
 
@@ -1321,7 +1348,6 @@ export class FloorPlanCanvas {
       endNodeId,
       thickness: thicknessCm,
     });
-    this.transformer.moveToTop();
     this.rebuildWallGeometry();
     this.joinAbuttingFreeEnds();
     return this.walls.get(wall.id) ?? wall;
@@ -1967,8 +1993,7 @@ export class FloorPlanCanvas {
     this.clearWallSelectionHighlight();
     this.selectedId = workspace.id;
     this.selectedWallThicknessSnapshotTaken = false;
-    this.transformer.nodes([workspace.group]);
-    this.transformer.getLayer()?.batchDraw();
+    this.deskSelection.attach(workspace);
     this.updateWallControls();
     this.emitSelectionChange();
   }
@@ -1977,9 +2002,8 @@ export class FloorPlanCanvas {
     this.clearWallSelectionHighlight();
     this.selectedId = wall.id;
     this.selectedWallThicknessSnapshotTaken = false;
-    this.transformer.nodes([]);
+    this.deskSelection.detach();
     wall.setSelected(true);
-    this.transformer.getLayer()?.batchDraw();
     this.structureLayer.batchDraw();
     this.updateWallControls();
     this.emitSelectionChange();
@@ -1995,8 +2019,8 @@ export class FloorPlanCanvas {
     this.clearWallSelectionHighlight();
     this.selectedId = null;
     this.selectedWallThicknessSnapshotTaken = false;
-    this.transformer.nodes([]);
-    this.transformer.getLayer()?.batchDraw();
+    this.deskSelection.detach();
+    this.mainLayer.batchDraw();
     this.structureLayer.batchDraw();
     this.updateWallControls();
     this.emitSelectionChange();

@@ -13,15 +13,14 @@ const STATUS_STYLE: Record<WorkspaceStatus, { fill: string; stroke: string; moni
   reserved: { fill: '#fff3e0', stroke: '#fb8c00', monitor: '#ffb74d', dot: '#ff9800' },
 };
 
-const WORKSPACE_MIN_SIZE_PX = 20;
 const COLLISION_STROKE = '#d32f2f';
 const MONITOR_WIDTH_PX = 40;
 const MONITOR_HEIGHT_PX = 6;
 
 /**
  * Одно интерактивное рабочее место на плане этажа, которое можно
- * перетаскивать. Выделение и Transformer управляются снаружи (в
- * FloorPlanCanvas), т.к. на сцене должен быть один общий Transformer.
+ * перетаскивать. Выделение (рамка и ручка поворота, см. DeskSelection) — одно
+ * на сцену и управляется снаружи, в FloorPlanCanvas.
  * Все размеры в WorkspaceData — сантиметры; в px переводятся только при
  * создании/чтении Konva-узла (как и Wall). Начало координат группы — левый
  * верхний угол стола, вокруг него же поворот (формат сохранённых планов).
@@ -74,20 +73,6 @@ export class Workspace {
       event.cancelBubble = true;
       onSelect(this);
     });
-
-    // Transformer масштабирует Group (scaleX/scaleY), а не width/height.
-    // Переносим масштаб в реальные размеры прямоугольника и раскладываем
-    // детали заново, иначе обводка, монитор и шрифт визуально исказятся.
-    this.group.on('transformend', () => {
-      const newWidth = Math.max(WORKSPACE_MIN_SIZE_PX, this.rect.width() * this.group.scaleX());
-      const newHeight = Math.max(WORKSPACE_MIN_SIZE_PX, this.rect.height() * this.group.scaleY());
-
-      this.rect.width(newWidth);
-      this.rect.height(newHeight);
-      this.group.scaleX(1);
-      this.group.scaleY(1);
-      this.layout();
-    });
   }
 
   /** Расставляет монитор, подпись и точку статуса по текущему размеру столешницы. */
@@ -115,6 +100,32 @@ export class Workspace {
     this.rect.stroke(style.stroke);
     this.monitor.fill(style.monitor);
     this.statusDot.fill(style.dot);
+  }
+
+  sizePx(): { width: number; height: number } {
+    return { width: this.rect.width() * this.group.scaleX(), height: this.rect.height() * this.group.scaleY() };
+  }
+
+  /** Центр столешницы на сцене, px (группа повёрнута вокруг левого верхнего угла). */
+  centerPx(): Point {
+    const { width, height } = this.sizePx();
+    const rad = (this.group.rotation() * Math.PI) / 180;
+    return {
+      x: this.group.x() + (width / 2) * Math.cos(rad) - (height / 2) * Math.sin(rad),
+      y: this.group.y() + (width / 2) * Math.sin(rad) + (height / 2) * Math.cos(rad),
+    };
+  }
+
+  /** Поворот вокруг центра стола (как в workplace-map) — сдвигаем угол группы так, чтобы центр остался на месте. */
+  rotateAroundCenter(angleDeg: number): void {
+    const center = this.centerPx();
+    const { width, height } = this.sizePx();
+    const rad = (angleDeg * Math.PI) / 180;
+    this.group.rotation(angleDeg);
+    this.group.position({
+      x: center.x - ((width / 2) * Math.cos(rad) - (height / 2) * Math.sin(rad)),
+      y: center.y - ((width / 2) * Math.sin(rad) + (height / 2) * Math.cos(rad)),
+    });
   }
 
   /** Углы столешницы на сцене, px — для проверки столкновений. */
