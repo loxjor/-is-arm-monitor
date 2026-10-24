@@ -75,15 +75,18 @@ export class EquipmentListScreen implements Screen {
           : null,
       ),
       h('div', { class: 'filters' },
-        this.search, this.statusSelect, this.typeSelect, this.roomSelect,
+        // Фильтры по справочникам — только тем, кому справочники доступны.
+        this.search, this.statusSelect, can('view_catalogs') ? [this.typeSelect, this.roomSelect] : null,
         h('label', { class: 'check' }, this.expiring, ' срок службы истекает в течение 12 мес.'),
       ),
       this.table.element,
       this.pager.element,
     );
 
-    void this.fillSelect(this.typeSelect, 'Все типы', catalogOptions('equipment-types'));
-    void this.fillSelect(this.roomSelect, 'Все помещения', catalogOptions('rooms'));
+    if (can('view_catalogs')) {
+      void this.fillSelect(this.typeSelect, 'Все типы', catalogOptions('equipment-types'));
+      void this.fillSelect(this.roomSelect, 'Все помещения', catalogOptions('rooms'));
+    }
     void this.load();
     if (context.query.has('new') && can('manage_equipment')) this.openNew();
   }

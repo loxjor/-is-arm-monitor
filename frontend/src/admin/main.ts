@@ -40,7 +40,7 @@ const ROUTES: Route[] = [
   { pattern: /^\/tickets\/new$/, permission: 'create_tickets', create: (context) => new NewTicketScreen(context) },
   { pattern: /^\/tickets\/(\d+)$/, create: (context) => new TicketCardScreen(context) },
   { pattern: /^\/map$/, create: (context) => new MapScreen(context) },
-  ...CATALOG_DEFS.map((def) => ({ pattern: new RegExp(`^/catalogs/${def.path}$`), create: () => new CatalogScreen(def) })),
+  ...CATALOG_DEFS.map((def) => ({ pattern: new RegExp(`^/catalogs/${def.path}$`), permission: 'view_catalogs' as const, create: () => new CatalogScreen(def) })),
   { pattern: /^\/users$/, permission: 'manage_users', create: () => new UsersScreen() },
   { pattern: /^\/audit-log$/, permission: 'view_audit_log', create: () => new AuditLogScreen() },
 ];
@@ -66,7 +66,7 @@ function navSections(): { title: string | null; items: NavItem[] }[] {
       ],
     },
     // Справочники — рабочий инструмент тех, кто видит весь парк; сотруднику и руководителю подразделения не нужны.
-    ...(currentUser().scope === 'all'
+    ...(currentUser().scope === 'all' && can('view_catalogs')
       ? [{ title: 'Справочники', items: CATALOG_DEFS.map((def) => ({ href: `#/catalogs/${def.path}`, label: def.title })) }]
       : []),
     {

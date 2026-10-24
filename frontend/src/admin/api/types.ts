@@ -17,7 +17,8 @@ export type Permission =
   | 'conduct_inventory'
   | 'prepare_writeoff'
   | 'approve_writeoff'
-  | 'view_reports';
+  | 'view_reports'
+  | 'view_catalogs';
 
 export type RoleCode = 'admin' | 'sysadmin' | 'head' | 'dept_head' | 'employee';
 

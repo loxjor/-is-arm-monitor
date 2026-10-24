@@ -25,6 +25,8 @@ class Permission(str, enum.Enum):
     prepare_writeoff = "prepare_writeoff"
     approve_writeoff = "approve_writeoff"
     view_reports = "view_reports"
+    # Чтение справочников (подразделения, сотрудники, помещения…) — не для рядового сотрудника.
+    view_catalogs = "view_catalogs"
 
 
 class DataScope(str, enum.Enum):
@@ -40,6 +42,7 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
     RoleCode.sysadmin: frozenset(
         {
             Permission.manage_catalogs,
+            Permission.view_catalogs,
             Permission.manage_equipment,
             Permission.assign_equipment,
             Permission.process_tickets,
@@ -48,8 +51,8 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
             Permission.prepare_writeoff,
         }
     ),
-    RoleCode.head: frozenset({Permission.approve_writeoff, Permission.view_reports}),
-    RoleCode.dept_head: frozenset({Permission.create_tickets, Permission.view_reports}),
+    RoleCode.head: frozenset({Permission.approve_writeoff, Permission.view_reports, Permission.view_catalogs}),
+    RoleCode.dept_head: frozenset({Permission.create_tickets, Permission.view_reports, Permission.view_catalogs}),
     RoleCode.employee: frozenset({Permission.create_tickets}),
 }
 

@@ -1,5 +1,5 @@
-"""Маршруты справочников. Читать может любой вошедший (нужно для выпадающих
-списков), изменять — только роли с правом manage_catalogs.
+"""Маршруты справочников. Читать — роли с правом view_catalogs (все, кроме
+рядового сотрудника), изменять — только с правом manage_catalogs.
 
 Без `from __future__ import annotations`: FastAPI читает аннотации тел
 запросов в момент создания маршрута, а они берутся из локальной переменной фабрики.
@@ -8,7 +8,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, require
+from app.api.deps import require
 from app.core.permissions import Permission
 from app.db.session import get_db
 from app.models import (
@@ -78,6 +78,7 @@ def _make_router(spec: CatalogSpec) -> APIRouter:
     Create = spec.create_schema
     Read = spec.read_schema
     editor = require(Permission.manage_catalogs)
+    reader = require(Permission.view_catalogs)
 
     @router.get("", response_model=Page[Read], name=f"list_{spec.path}")
     def list_records(
@@ -86,7 +87,7 @@ def _make_router(spec: CatalogSpec) -> APIRouter:
         limit: int = Query(default=50, ge=1, le=1000),
         offset: int = Query(default=0, ge=0),
         db: Session = Depends(get_db),
-        _: AppUser = Depends(get_current_user),
+        _: AppUser = Depends(reader),
     ):
         # Фильтры по внешним ключам (?dept_id=3) — из перечня spec.filter_fields.
         filters: dict[str, int] = {}
@@ -100,7 +101,7 @@ def _make_router(spec: CatalogSpec) -> APIRouter:
         return {"items": items, "total": total}
 
     @router.get("/{pk}", response_model=Read, name=f"get_{spec.path}")
-    def get_record(pk: int, db: Session = Depends(get_db), _: AppUser = Depends(get_current_user)):
+    def get_record(pk: int, db: Session = Depends(get_db), _: AppUser = Depends(reader)):
         try:
             return catalog_service.get_record(db, spec, pk)
         except NotFoundError as error:

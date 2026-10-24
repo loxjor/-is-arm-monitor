@@ -10,10 +10,14 @@ CATALOG_PATHS = [
 
 
 @pytest.mark.parametrize("path", CATALOG_PATHS)
-def test_any_user_can_read(client: TestClient, path: str) -> None:
-    response = client.get(f"/api/v1/{path}", headers=login(client, "employee"))
+def test_catalogs_readable_except_employee(client: TestClient, path: str) -> None:
+    response = client.get(f"/api/v1/{path}", headers=login(client, "depthead"))
     assert response.status_code == 200
     assert response.json()["total"] >= 1
+    # У рядового сотрудника доступа к справочникам нет — ни к списку, ни к записи.
+    employee = login(client, "employee")
+    assert client.get(f"/api/v1/{path}", headers=employee).status_code == 403
+    assert client.get(f"/api/v1/{path}/1", headers=employee).status_code == 403
 
 
 def test_only_catalog_editors_can_write(client: TestClient) -> None:
