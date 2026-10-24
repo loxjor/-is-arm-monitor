@@ -13,6 +13,7 @@ import {
   type NodeRay,
 } from '../utils/wallPolygon';
 import { generateId } from '../utils/id';
+import { polygonsOverlap, rectCorners, shrinkRect, type Point as DeskPoint } from '../utils/deskCollision';
 import { PIXELS_PER_CM, cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 import { GRID_MAJOR_EVERY, GRID_MINOR_SPACING_PX, getGridTilePattern } from '../utils/grid';
@@ -44,7 +45,13 @@ import {
 
 // 'view' — только просмотр (учётная часть): объекты не выделяются и не
 // двигаются, работают лишь зум и панорамирование.
-export type CanvasMode = 'select' | 'draw-wall' | 'view';
+export type CanvasMode = 'select' | 'draw-wall' | 'view' | 'place-desk';
+
+/** Размер стола, который ставит инструмент «Рабочее место», см (как DESK в workplace-map). */
+export const DESK_PLACEMENT_SIZE_CM = { width: 120, height: 60 } as const;
+const DESK_GRID_SNAP_CM = 10;
+// Поворот стола рамкой Transformer — с привязкой к шагу 45° (rotationSnapStep в workplace-map).
+const DESK_ROTATION_SNAPS = [0, 45, 90, 135, 180, 225, 270, 315];
 
 /** То, что тулбар показывает про выделенную стену. */
 export interface SelectedWallInfo {
@@ -253,6 +260,10 @@ export class FloorPlanCanvas {
   private wallSnapIndicator: Konva.Circle | null = null;
   private wallGhost: Konva.Rect | null = null;
   private readonly resizeObserver: ResizeObserver;
+  private snapEnabled = true;
+  private deskGhost: Konva.Rect | null = null;
+  private deskGhostRotation = 0;
+  private onDeskPlace: ((topLeftCm: { x: Cm; y: Cm }, rotation: number) => void) | null = null;
 
   constructor(containerId: string, width: number, height: number) {
     this.stage = new Konva.Stage({
@@ -278,6 +289,8 @@ export class FloorPlanCanvas {
 
     this.transformer = new Konva.Transformer({
       rotateEnabled: true,
+      rotationSnaps: DESK_ROTATION_SNAPS,
+      rotationSnapTolerance: 10,
       enabledAnchors: [
         'top-left',
         'top-center',
@@ -317,6 +330,13 @@ export class FloorPlanCanvas {
     this.stage.on('mousedown touchstart', (event) => this.handleWallDrawStart(event));
     this.stage.on('mousemove touchmove', (event) => this.handleWallDrawMove(event));
     this.stage.on('wheel', (event) => this.handleWheelZoom(event));
+    this.stage.on('mousemove touchmove', () => {
+      if (this.mode !== 'place-desk') return;
+      const pointer = this.stage.getRelativePointerPosition();
+      if (pointer) this.updateDeskGhost(pointer);
+    });
+    this.stage.on('click tap', (event) => this.handleDeskPlaceClick(event));
+    this.stage.container().addEventListener('mouseleave', () => this.hideDeskGhost());
 
     // На window, а не на stage: если увести курсор за пределы холста и
     // отпустить кнопку там, Konva-события на stage не долетают вовсе, и
@@ -605,7 +625,11 @@ export class FloorPlanCanvas {
     // с собственной draggable=true (тот перетащится сам, а не сцена).
     this.stage.draggable(mode === 'select' || mode === 'view');
 
-    this.stage.container().style.cursor = mode === 'draw-wall' ? 'crosshair' : 'default';
+    this.stage.container().style.cursor = mode === 'draw-wall' || mode === 'place-desk' ? 'crosshair' : 'default';
+
+    if (mode !== 'place-desk') {
+      this.hideDeskGhost();
+    }
 
     if (mode !== 'draw-wall') {
       // Переключение инструмента посреди протяжки не должно оставлять на
@@ -618,6 +642,130 @@ export class FloorPlanCanvas {
 
   getMode(): CanvasMode {
     return this.mode;
+  }
+
+  /**
+   * Режим 'place-desk': клик ставит стол центром в точку курсора — движок
+   * сообщает только место и поворот, данные стола (id, подпись) задаёт
+   * вызывающий код и добавляет его через addWorkspace.
+   */
+  setOnDeskPlace(callback: (topLeftCm: { x: Cm; y: Cm }, rotation: number) => void): void {
+    this.onDeskPlace = callback;
+  }
+
+  /** Клавиша R в режиме размещения — повернуть будущий стол на 90°. */
+  rotateDeskGhost(): void {
+    this.deskGhostRotation = (this.deskGhostRotation + 90) % 360;
+    const pointer = this.stage.getRelativePointerPosition();
+    if (pointer) this.updateDeskGhost(pointer);
+  }
+
+  /**
+   * Левый верхний угол стола (начало координат Workspace, вокруг него же
+   * поворот), при котором центр повёрнутого стола совпадает с точкой.
+   */
+  private deskTopLeftPx(centerPx: { x: number; y: number }): { x: number; y: number } {
+    const w = cmToPx(DESK_PLACEMENT_SIZE_CM.width);
+    const h = cmToPx(DESK_PLACEMENT_SIZE_CM.height);
+    const rad = (this.deskGhostRotation * Math.PI) / 180;
+    return {
+      x: centerPx.x - ((w / 2) * Math.cos(rad) - (h / 2) * Math.sin(rad)),
+      y: centerPx.y - ((w / 2) * Math.sin(rad) + (h / 2) * Math.cos(rad)),
+    };
+  }
+
+  private updateDeskGhost(pointerPx: { x: number; y: number }): void {
+    if (!this.deskGhost) {
+      this.deskGhost = new Konva.Rect({
+        width: cmToPx(DESK_PLACEMENT_SIZE_CM.width),
+        height: cmToPx(DESK_PLACEMENT_SIZE_CM.height),
+        fill: 'rgba(76, 175, 80, 0.2)',
+        stroke: '#4caf50',
+        strokeWidth: 2,
+        dash: [6, 3],
+        cornerRadius: 4,
+        opacity: 0.8,
+        listening: false,
+      });
+      this.mainLayer.add(this.deskGhost);
+    }
+    const topLeft = this.deskTopLeftPx(this.snapDeskCenter(pointerPx));
+    const blocked = this.deskCollides(this.ghostCornersPx(topLeft));
+    this.deskGhost.position(topLeft);
+    this.deskGhost.rotation(this.deskGhostRotation);
+    this.deskGhost.fill(blocked ? 'rgba(244, 67, 54, 0.2)' : 'rgba(76, 175, 80, 0.2)');
+    this.deskGhost.stroke(blocked ? '#f44336' : '#4caf50');
+    this.deskGhost.visible(true);
+    this.mainLayer.batchDraw();
+  }
+
+  /** Центр нового стола — к сетке 10 см (как DESK.SNAP_TO_GRID в workplace-map), если магниты включены. */
+  private snapDeskCenter(pointerPx: { x: number; y: number }): { x: number; y: number } {
+    if (!this.snapEnabled) return pointerPx;
+    const step = cmToPx(DESK_GRID_SNAP_CM);
+    return { x: Math.round(pointerPx.x / step) * step, y: Math.round(pointerPx.y / step) * step };
+  }
+
+  private ghostCornersPx(topLeft: { x: number; y: number }): DeskPoint[] {
+    return rectCorners(
+      topLeft,
+      cmToPx(DESK_PLACEMENT_SIZE_CM.width),
+      cmToPx(DESK_PLACEMENT_SIZE_CM.height),
+      this.deskGhostRotation,
+    );
+  }
+
+  /**
+   * Перекрывает ли прямоугольник стола какую-нибудь стену или другой стол.
+   * Стол ужимается на 1 px: вплотную к стене или к соседу ставить можно.
+   */
+  private deskCollides(cornersPx: readonly DeskPoint[], excludeWorkspaceId?: string): boolean {
+    const desk = shrinkRect(cornersPx, 1);
+    for (const wall of this.walls.values()) {
+      if (polygonsOverlap(desk, wall.getPolygon())) return true;
+    }
+    for (const [id, workspace] of this.workspaces) {
+      if (id !== excludeWorkspaceId && polygonsOverlap(desk, workspace.cornersPx())) return true;
+    }
+    return false;
+  }
+
+  private hideDeskGhost(): void {
+    if (this.deskGhost?.visible()) {
+      this.deskGhost.visible(false);
+      this.mainLayer.batchDraw();
+    }
+  }
+
+  private handleDeskPlaceClick(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
+    if (this.mode !== 'place-desk') return;
+    if (event.evt instanceof MouseEvent && event.evt.button !== 0) return;
+    const pointer = this.stage.getRelativePointerPosition();
+    if (!pointer) return;
+    const topLeft = this.deskTopLeftPx(this.snapDeskCenter(pointer));
+    // На стену или другой стол не ставим — призрак в этот момент красный.
+    if (this.deskCollides(this.ghostCornersPx(topLeft))) return;
+    this.onDeskPlace?.({ x: pxToCm(topLeft.x), y: pxToCm(topLeft.y) }, this.deskGhostRotation);
+  }
+
+  /** Центр видимой части сцены, см — туда инструмент «Рабочее место» ставит новый стол. */
+  getViewCenterCm(): { x: Cm; y: Cm } {
+    const scale = this.stage.scaleX();
+    return {
+      x: pxToCm((this.stage.width() / 2 - this.stage.x()) / scale),
+      y: pxToCm((this.stage.height() / 2 - this.stage.y()) / scale),
+    };
+  }
+
+  /** Переключатель «Размеры» в тулбаре: подписи длин стен. */
+  setShowDimensions(visible: boolean): void {
+    this.dimensionLayer.visible(visible);
+    this.dimensionLayer.batchDraw();
+  }
+
+  /** Переключатель «Магниты»: выключено — то же, что чертить с зажатым Shift. */
+  setSnapEnabled(enabled: boolean): void {
+    this.snapEnabled = enabled;
   }
 
   /** Снимает слушатели с window и уничтожает сцену — когда холст встроен в экран, который закрывают. */
@@ -651,6 +799,17 @@ export class FloorPlanCanvas {
     const workspace = new Workspace(data, (selected) => this.selectWorkspace(selected));
     workspace.setDraggable(this.mode === 'select');
     workspace.group.on('dragstart transformstart', () => this.pushUndoSnapshot());
+    // Как в CursorTool workplace-map: пока тащат на занятое место — красная
+    // обводка; отпустили там — стол возвращается туда, откуда его взяли
+    // (снимок для отмены сделан на dragstart/transformstart).
+    workspace.group.on('dragmove transform', () => {
+      workspace.setColliding(this.deskCollides(workspace.cornersPx(), workspace.id));
+    });
+    workspace.group.on('dragend transformend', () => {
+      const blocked = this.deskCollides(workspace.cornersPx(), workspace.id);
+      workspace.setColliding(false);
+      if (blocked) this.undo();
+    });
     this.mainLayer.add(workspace.group);
     this.workspaces.set(data.id, workspace);
     this.transformer.moveToTop();
@@ -989,7 +1148,7 @@ export class FloorPlanCanvas {
       }
     });
 
-    if (!mergeTargetNodeId && !shiftKey) {
+    if (!mergeTargetNodeId && !shiftKey && this.snapEnabled) {
       const anchor = this.nodePointPx(end === 'start' ? wall.endNodeId : wall.startNodeId);
       const dx = pos.x - anchor.x;
       const dy = pos.y - anchor.y;
@@ -1337,6 +1496,9 @@ export class FloorPlanCanvas {
    * Побеждает ближайшая по расстоянию цель среди всех типов.
    */
   private findWallSnapPx(pos: WallEndpoint, exclude?: ReadonlySet<string>): WallSnap | null {
+    if (!this.snapEnabled) {
+      return null;
+    }
     const snapRadiusPx = this.snapRadiusPx;
     const axisSnapRadiusPx = this.axisSnapRadiusPx;
     let bestDist = snapRadiusPx;
@@ -2405,7 +2567,7 @@ export class FloorPlanCanvas {
     let lengthPx = Math.hypot(dx, dy);
 
     const nativeEvent = event.evt as MouseEvent;
-    const magnetismEnabled = !nativeEvent.shiftKey;
+    const magnetismEnabled = this.snapEnabled && !nativeEvent.shiftKey;
     const snappedGuideDeg = magnetismEnabled
       ? findSnappedGuideLineDeg(dx, dy, cmToPx(GUIDE_SNAP_TOLERANCE_CM))
       : null;

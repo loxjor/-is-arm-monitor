@@ -18,6 +18,9 @@ export class MapScreen implements Screen {
   private readonly select = h('select', { 'aria-label': 'План этажа' });
   private readonly status = h('span', { class: 'muted small' });
   private readonly container = h('div', { id: CONTAINER_ID, class: 'map-wrap' });
+  // Ведёт в редактор на тот же план, что открыт здесь (index.html?plan=N).
+  private readonly editorLink = h('a', { class: 'btn btn--plain', href: '/index.html', target: '_blank', rel: 'noopener' },
+    'Открыть в редакторе');
   private canvas: FloorPlanCanvas | null = null;
   private destroyed = false;
 
@@ -30,9 +33,7 @@ export class MapScreen implements Screen {
           h('h1', null, this.title),
           h('p', { class: 'muted' }, 'Колесо мыши — масштаб, перетаскивание — перемещение по плану.'),
         ),
-        can('manage_catalogs')
-          ? h('a', { class: 'btn btn--plain', href: '/index.html', target: '_blank', rel: 'noopener' }, 'Открыть редактор карты')
-          : null,
+        can('manage_catalogs') ? this.editorLink : null,
       ),
       h('div', { class: 'filters' }, this.select, this.status),
       this.container,
@@ -65,6 +66,7 @@ export class MapScreen implements Screen {
 
   private async show(planId: number): Promise<void> {
     this.status.textContent = 'Загрузка плана…';
+    this.editorLink.setAttribute('href', `/index.html?plan=${planId}`);
     try {
       const [{ FloorPlanCanvas }, { loadFloorPlan }] = await Promise.all([
         import('../../components/FloorPlanCanvas'),

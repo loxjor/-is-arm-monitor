@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import secrets
 from datetime import date, datetime, time, timedelta
+from pathlib import Path
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -90,6 +91,24 @@ def seed(db: Session) -> None:
 
     if db.scalar(select(FloorPlan).limit(1)) is None:
         seed_floor_plan(db)
+
+    seed_example_plans(db)
+
+
+EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "docs" / "examples"
+
+
+def seed_example_plans(db: Session) -> None:
+    """Готовые схемы из docs/examples/*.json (формат POST /floor-plans) — каждая один раз, по названию."""
+    if not EXAMPLES_DIR.is_dir():
+        return
+    existing = set(db.scalars(select(FloorPlan.name)))
+    for path in sorted(EXAMPLES_DIR.glob("*.json")):
+        data = FloorPlanCreate.model_validate_json(path.read_text(encoding="utf-8"))
+        if data.name in existing:
+            continue
+        floor_plan_service.create_floor_plan(db, data)
+        print(f"Пример плана добавлен: {data.name}")
 
 
 def seed_floor_plan(db: Session) -> None:

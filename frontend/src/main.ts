@@ -1,79 +1,161 @@
-import './styles.css';
-import { FloorPlanCanvas, type SelectedWallInfo } from './components/FloorPlanCanvas';
+import './style.css';
+import {
+  DESK_PLACEMENT_SIZE_CM,
+  FloorPlanCanvas,
+  type CanvasMode,
+  type SelectedWallInfo,
+} from './components/FloorPlanCanvas';
 import { cm } from './utils/scale';
+import { generateId } from './utils/id';
 import type { WorkspaceStatus } from './types/workspace';
-import { FloorPlanApiError, loadFloorPlan, saveFloorPlan } from './api/floorPlans';
+import { FloorPlanApiError, listFloorPlans, loadFloorPlan, saveFloorPlan } from './api/floorPlans';
 
-// #app больше не на весь экран — тулбар занимает свою полосу в потоке (см.
-// styles.css), поэтому размер сцены берём из самого контейнера, а не из
-// window.innerWidth/innerHeight (иначе сцена стартует шире/выше реального
-// места и обрезается только на первый ResizeObserver-тик).
-const appContainer = document.getElementById('app')!;
-const canvas = new FloorPlanCanvas('app', appContainer.clientWidth, appContainer.clientHeight);
+// Интерфейс — из ветки workplace-map (верхняя/левая/нижняя панели), движок
+// черчения — FloorPlanCanvas. Холст занимает весь экран, панели поверх него.
+const canvasContainer = document.getElementById('editor-canvas')!;
+const canvas = new FloorPlanCanvas('editor-canvas', canvasContainer.clientWidth, canvasContainer.clientHeight);
 
-// 150×130 см координаты дают ту же экранную позицию, что и раньше (300,260 px
-// при PIXELS_PER_CM=2); 120×80 см — правдоподобный размер офисного стола.
-canvas.addWorkspace({
-  id: 'ws-1',
-  x: cm(150),
-  y: cm(130),
-  width: cm(120),
-  height: cm(80),
-  rotation: 0,
-  label: 'Стол №1',
-  status: 'free',
-});
+const $ = <T extends HTMLElement>(selector: string): T => document.querySelector<T>(selector)!;
 
-const selectBtn = document.querySelector<HTMLButtonElement>('#btn-select')!;
-const drawWallBtn = document.querySelector<HTMLButtonElement>('#btn-draw-wall')!;
-const planInput = document.querySelector<HTMLInputElement>('#input-plan')!;
-const thicknessInput = document.querySelector<HTMLInputElement>('#input-thickness')!;
-const lengthInput = document.querySelector<HTMLInputElement>('#input-length')!;
-const scaleReadout = document.querySelector<HTMLSpanElement>('#scale-readout')!;
-const resetViewBtn = document.querySelector<HTMLButtonElement>('#btn-reset-view')!;
-const savePlanBtn = document.querySelector<HTMLButtonElement>('#btn-save-plan')!;
-const openPlanBtn = document.querySelector<HTMLButtonElement>('#btn-open-plan')!;
-const saveStatus = document.querySelector<HTMLSpanElement>('#save-status')!;
-const statusButtons: Array<[HTMLButtonElement, WorkspaceStatus]> = [
-  [document.querySelector<HTMLButtonElement>('#btn-status-free')!, 'free'],
-  [document.querySelector<HTMLButtonElement>('#btn-status-occupied')!, 'occupied'],
-  [document.querySelector<HTMLButtonElement>('#btn-status-reserved')!, 'reserved'],
-];
+const saveBtn = $<HTMLButtonElement>('#btn-save');
+const loadBtn = $<HTMLButtonElement>('#btn-load');
+const printBtn = $<HTMLButtonElement>('#btn-print');
+const planTitle = $<HTMLSpanElement>('#plan-title');
+const saveStatus = $<HTMLSpanElement>('#save-status');
 
-function setActiveButton(active: HTMLButtonElement): void {
-  [selectBtn, drawWallBtn].forEach((btn) => btn.classList.toggle('active', btn === active));
+const cursorBtn = $<HTMLButtonElement>('#btn-cursor');
+const wallBtn = $<HTMLButtonElement>('#btn-wall');
+const deskBtn = $<HTMLButtonElement>('#btn-desk');
+const leftToolbar = $<HTMLElement>('.left-toolbar');
+
+const toolSettings = $<HTMLElement>('#tool-settings');
+const wallSettings = $<HTMLElement>('#settings-wall');
+const wallThicknessValue = $<HTMLInputElement>('#settings-wall .setting-value');
+const selectedWallSettings = $<HTMLElement>('#settings-selected-wall');
+const lengthInput = $<HTMLInputElement>('#input-length');
+const selectedThicknessInput = $<HTMLInputElement>('#input-selected-thickness');
+const deskSettings = $<HTMLElement>('#settings-desk');
+
+const hint = $<HTMLElement>('#canvas-hint');
+const undoBtn = $<HTMLButtonElement>('#btn-undo');
+const deleteBtn = $<HTMLButtonElement>('#btn-delete');
+const hintsToggle = $<HTMLInputElement>('#hints-toggle');
+const snapToggle = $<HTMLInputElement>('#snap-toggle');
+const dimensionsToggle = $<HTMLInputElement>('#dimensions-toggle');
+const themeToggle = $<HTMLInputElement>('#theme-toggle');
+const backgroundInput = $<HTMLInputElement>('#input-background');
+const centerBtn = $<HTMLButtonElement>('#btn-center');
+const scaleReadout = $<HTMLSpanElement>('#scale-readout');
+
+const settingsBtn = $<HTMLButtonElement>('#btn-settings');
+const settingsModal = $<HTMLElement>('#modal-settings');
+const planNameInput = $<HTMLInputElement>('#input-plan-name');
+
+// ─── Инструменты ───────────────────────────────────────────────
+
+const HINTS: Record<CanvasMode, string> = {
+  select:
+    'Выбор: клик — выделить стену или стол, перетаскивание — переместить. ' +
+    'Колесо — масштаб, перетаскивание пустого места — сдвиг плана. Delete — удалить.',
+  'draw-wall':
+    'Стена: протяните от точки до точки. Shift — без магнитов. ' +
+    'Начните от торца или тела стены, чтобы примкнуть к ней.',
+  view: '',
+  'place-desk': 'Рабочее место: клик — поставить стол, R — повернуть на 90°, Esc — закончить.',
+};
+
+let selectedWall: SelectedWallInfo | null = null;
+
+function setTool(mode: CanvasMode): void {
+  canvas.setMode(mode);
+  cursorBtn.classList.toggle('active', mode === 'select');
+  wallBtn.classList.toggle('active', mode === 'draw-wall');
+  deskBtn.classList.toggle('active', mode === 'place-desk');
+  // Как в исходном интерфейсе: пока чертят стену, левая панель свёрнута,
+  // чтобы не закрывать холст рядом с панелью толщины.
+  leftToolbar.classList.toggle('force-collapse', mode === 'draw-wall');
+  hint.textContent = HINTS[mode];
+  refreshSettingsPanel();
 }
 
-selectBtn.addEventListener('click', () => {
-  canvas.setMode('select');
-  setActiveButton(selectBtn);
-});
+cursorBtn.addEventListener('click', () => setTool('select'));
+wallBtn.addEventListener('click', () => setTool('draw-wall'));
 
-drawWallBtn.addEventListener('click', () => {
-  canvas.setMode('draw-wall');
-  setActiveButton(drawWallBtn);
-});
+deskBtn.addEventListener('click', () => setTool('place-desk'));
 
-// На input применяем значение сразу (по мере ввода), но НЕ переписываем
-// поле — иначе при наборе "10" уже после первого "1" (обрезка в допустимый
-// диапазон не меняет однозначные числа, но в общем случае могла бы) поле
-// переписалось бы под курсором, и двузначные значения стало бы невозможно
-// набрать. Нормализация видимого текста — только на change/blur, когда
-// пользователь закончил ввод: 500 → 60 ровно так, как ожидает S11.
-thicknessInput.addEventListener('input', () => {
-  const value = Number(thicknessInput.value);
-  if (Number.isFinite(value)) {
-    canvas.setWallThickness(value);
+/** Следующий номер «АРМ N» — после максимального среди уже стоящих столов, а не по их количеству. */
+function nextDeskNumber(): number {
+  let max = 0;
+  for (const workspace of canvas.serialize().workspaces) {
+    const match = /^АРМ (\d+)$/.exec(workspace.label);
+    if (match) max = Math.max(max, Number(match[1]));
   }
+  return max + 1;
+}
+
+canvas.setOnDeskPlace((topLeft, rotation) => {
+  canvas.addWorkspace({
+    id: generateId('workspace'),
+    x: topLeft.x,
+    y: topLeft.y,
+    width: cm(DESK_PLACEMENT_SIZE_CM.width),
+    height: cm(DESK_PLACEMENT_SIZE_CM.height),
+    rotation,
+    label: `АРМ ${nextDeskNumber()}`,
+    status: 'free',
+  });
 });
 
-thicknessInput.addEventListener('change', () => {
-  thicknessInput.value = String(selectedWall?.thicknessCm ?? canvas.getWallThickness());
+// ─── Панель настроек: толщина новой стены / выделенная стена / стол ─────
+
+function selectedDeskId(): string | null {
+  const id = canvas.getSelectedId();
+  return id !== null && canvas.getWorkspace(id) ? id : null;
+}
+
+function refreshSettingsPanel(): void {
+  const mode = canvas.getMode();
+  const showNewWall = mode === 'draw-wall';
+  const showSelectedWall = mode === 'select' && selectedWall !== null;
+  const showDesk = mode === 'select' && selectedDeskId() !== null;
+
+  wallSettings.hidden = !showNewWall;
+  selectedWallSettings.hidden = !showSelectedWall;
+  deskSettings.hidden = !showDesk;
+  toolSettings.style.display = showNewWall || showSelectedWall || showDesk ? 'block' : 'none';
+
+  if (showNewWall) {
+    wallThicknessValue.value = String(canvas.getWallThickness());
+  }
+  if (showSelectedWall && selectedWall) {
+    // Поле, в котором сейчас печатают, не трогаем — текст переписывался бы под курсором.
+    if (document.activeElement !== lengthInput) lengthInput.value = String(Math.round(selectedWall.lengthCm));
+    if (document.activeElement !== selectedThicknessInput) {
+      selectedThicknessInput.value = String(selectedWall.thicknessCm);
+    }
+  }
+}
+
+function applyNewWallThickness(value: number): void {
+  wallThicknessValue.value = String(canvas.setWallThickness(value));
+}
+
+$<HTMLButtonElement>('#settings-wall .setting-btn.minus').addEventListener('click', () => {
+  applyNewWallThickness(canvas.getWallThickness() - 1);
+});
+$<HTMLButtonElement>('#settings-wall .setting-btn.plus').addEventListener('click', () => {
+  applyNewWallThickness(canvas.getWallThickness() + 1);
+});
+document.querySelectorAll<HTMLElement>('#settings-wall .preset-btn').forEach((preset) => {
+  const apply = () => applyNewWallThickness(Number(preset.textContent));
+  preset.addEventListener('click', apply);
+  preset.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') apply();
+  });
 });
 
-// Длину применяем только по change (Enter/уход из поля), а не на каждый
-// input, как толщину: промежуточное "1" при наборе "150" сжало бы стену до
-// минимума и потащило за собой соседей.
+// Длину — только по change (Enter/уход из поля): промежуточное «1» при наборе
+// «150» сжало бы стену до минимума и потащило за собой соседей.
 lengthInput.addEventListener('change', () => {
   const applied = canvas.setSelectedWallLength(Number(lengthInput.value));
   if (applied === null && selectedWall) {
@@ -81,51 +163,71 @@ lengthInput.addEventListener('change', () => {
   }
 });
 
-let selectedWall: SelectedWallInfo | null = null;
-
-// Поля тулбара показывают выделенную стену; без выделения — толщину, с
-// которой начнётся следующая стена. Поле, в котором сейчас печатают, не
-// трогаем — иначе текст переписывался бы под курсором.
-canvas.setOnSelectionChange((wall) => {
-  selectedWall = wall;
-  lengthInput.disabled = wall === null;
-  if (document.activeElement !== lengthInput) {
-    lengthInput.value = wall ? String(Math.round(wall.lengthCm)) : '';
-  }
-  if (document.activeElement !== thicknessInput) {
-    thicknessInput.value = String(wall?.thicknessCm ?? canvas.getWallThickness());
-  }
+// Толщина выделенной стены — сразу по вводу (движок применяет её к выделенной
+// стене), нормализация видимого значения — при уходе из поля.
+selectedThicknessInput.addEventListener('input', () => {
+  const value = Number(selectedThicknessInput.value);
+  if (Number.isFinite(value) && value > 0) canvas.setWallThickness(value);
+});
+selectedThicknessInput.addEventListener('change', () => {
+  selectedThicknessInput.value = String(selectedWall?.thicknessCm ?? canvas.getWallThickness());
 });
 
-planInput.addEventListener('change', () => {
-  const file = planInput.files?.[0];
-  if (!file) {
-    return;
-  }
-  const url = URL.createObjectURL(file);
-  canvas.loadBackgroundPlan(url);
-});
-
-canvas.setOnScaleChange((scale) => {
-  scaleReadout.textContent = `Масштаб: ${Math.round(scale * 100)}%`;
-});
-
-resetViewBtn.addEventListener('click', () => {
-  canvas.resetView();
-});
-
-statusButtons.forEach(([button, status]) => {
-  button.addEventListener('click', () => {
-    canvas.setSelectedWorkspaceStatus(status);
+document.querySelectorAll<HTMLElement>('#settings-desk .preset-btn').forEach((button) => {
+  const apply = () => canvas.setSelectedWorkspaceStatus(button.dataset.status as WorkspaceStatus);
+  button.addEventListener('click', apply);
+  button.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') apply();
   });
 });
 
-// Единственный "текущий план" на устройство — id запоминается в
-// localStorage, чтобы "Открыть" работал и после F5 (S12: сохранить →
-// обновить страницу → открыть). Полноценный выбор/список планов —
-// отдельная, сознательно не начатая здесь предметная область (Этап 4
-// делает минимальный сквозной срез, не весь UI планов).
+canvas.setOnSelectionChange((wall) => {
+  selectedWall = wall;
+  refreshSettingsPanel();
+});
+// Выделение стола движок не сообщает колбэком — сверяемся после клика по холсту.
+canvasContainer.addEventListener('mouseup', () => window.setTimeout(refreshSettingsPanel, 0));
+canvasContainer.addEventListener('touchend', () => window.setTimeout(refreshSettingsPanel, 0));
+
+// ─── Нижняя панель ─────────────────────────────────────────────
+
+undoBtn.addEventListener('click', () => {
+  canvas.undo();
+  refreshSettingsPanel();
+});
+deleteBtn.addEventListener('click', () => {
+  canvas.removeSelected();
+  refreshSettingsPanel();
+});
+
+hintsToggle.addEventListener('change', () => {
+  hint.hidden = !hintsToggle.checked;
+});
+snapToggle.addEventListener('change', () => canvas.setSnapEnabled(snapToggle.checked));
+dimensionsToggle.addEventListener('change', () => canvas.setShowDimensions(dimensionsToggle.checked));
+themeToggle.addEventListener('change', () => {
+  document.body.classList.toggle('dark-theme', themeToggle.checked);
+});
+
+backgroundInput.addEventListener('change', () => {
+  const file = backgroundInput.files?.[0];
+  if (file) canvas.loadBackgroundPlan(URL.createObjectURL(file));
+});
+
+centerBtn.addEventListener('click', () => canvas.resetView());
+canvas.setOnScaleChange((scale) => {
+  scaleReadout.textContent = `${Math.round(scale * 100)}%`;
+});
+
+printBtn.addEventListener('click', () => window.print());
+
+// ─── Сохранение и открытие планов ──────────────────────────────
+
+// Последний открытый/сохранённый план запоминается в localStorage — после
+// F5 «Сохранить» обновляет его же, а не создаёт новый. Открыть можно любой
+// план из списка («Загрузить») или по адресу index.html?plan=N.
 const FLOOR_PLAN_ID_STORAGE_KEY = 'floorPlanId';
+const FLOOR_PLAN_NAME_STORAGE_KEY = 'floorPlanName';
 
 function readStoredFloorPlanId(): number | null {
   const raw = localStorage.getItem(FLOOR_PLAN_ID_STORAGE_KEY);
@@ -134,57 +236,186 @@ function readStoredFloorPlanId(): number | null {
 }
 
 let currentFloorPlanId: number | null = readStoredFloorPlanId();
-let saveStatusTimeoutId: number | undefined;
+let currentFloorPlanName: string | null = localStorage.getItem(FLOOR_PLAN_NAME_STORAGE_KEY);
+let statusTimeoutId: number | undefined;
 
-function showSaveStatus(text: string, isError: boolean): void {
-  window.clearTimeout(saveStatusTimeoutId);
+function rememberPlan(id: number | null, name: string | null): void {
+  currentFloorPlanId = id;
+  currentFloorPlanName = name;
+  if (id === null) localStorage.removeItem(FLOOR_PLAN_ID_STORAGE_KEY);
+  else localStorage.setItem(FLOOR_PLAN_ID_STORAGE_KEY, String(id));
+  if (name === null) localStorage.removeItem(FLOOR_PLAN_NAME_STORAGE_KEY);
+  else localStorage.setItem(FLOOR_PLAN_NAME_STORAGE_KEY, name);
+  planTitle.textContent = name ?? '';
+  document.title = name ? `${name} — редактор плана` : 'Редактор плана этажа';
+}
+
+function showStatus(text: string, isError: boolean): void {
+  window.clearTimeout(statusTimeoutId);
   saveStatus.textContent = text;
   saveStatus.classList.toggle('save-status-error', isError);
-  saveStatusTimeoutId = window.setTimeout(() => {
+  statusTimeoutId = window.setTimeout(() => {
     saveStatus.textContent = '';
   }, 4000);
 }
 
-savePlanBtn.addEventListener('click', () => {
-  void (async () => {
-    try {
-      const id = await saveFloorPlan(canvas.serialize(), currentFloorPlanId);
-      currentFloorPlanId = id;
-      localStorage.setItem(FLOOR_PLAN_ID_STORAGE_KEY, String(id));
-      showSaveStatus('Сохранено', false);
-    } catch (error) {
-      // Бэкенд может быть недоступен (F5 без backend/, сеть и т.д.) —
-      // черчение при этом продолжает работать, падать здесь нельзя.
-      const message = error instanceof Error ? error.message : 'неизвестная ошибка';
-      showSaveStatus(`Не удалось сохранить: ${message}`, true);
+async function savePlan(name: string): Promise<void> {
+  try {
+    const id = await saveFloorPlan(canvas.serialize(), currentFloorPlanId, name);
+    rememberPlan(id, name);
+    showStatus('Сохранено', false);
+  } catch (error) {
+    // Бэкенд может быть недоступен — черчение при этом продолжает работать.
+    const message = error instanceof Error ? error.message : 'неизвестная ошибка';
+    showStatus(`Не удалось сохранить: ${message}`, true);
+  }
+}
+
+saveBtn.addEventListener('click', () => {
+  let name = currentFloorPlanName;
+  if (currentFloorPlanId === null || !name) {
+    name = window.prompt('Название плана', name ?? 'Новый план')?.trim() || null;
+    if (!name) return;
+  }
+  void savePlan(name);
+});
+
+async function openPlan(planId: number, name: string): Promise<void> {
+  try {
+    const scene = await loadFloorPlan(planId);
+    canvas.loadScene(scene);
+    canvas.resetView();
+    rememberPlan(planId, name);
+    selectedWall = null;
+    refreshSettingsPanel();
+    showStatus('Открыто', false);
+  } catch (error) {
+    // 404 — плана больше нет на сервере: забываем его, иначе «Сохранить»
+    // упиралось бы в несуществующий id.
+    if (error instanceof FloorPlanApiError && error.status === 404 && currentFloorPlanId === planId) {
+      rememberPlan(null, null);
     }
+    const message = error instanceof Error ? error.message : 'неизвестная ошибка';
+    showStatus(`Не удалось открыть: ${message}`, true);
+  }
+}
+
+let planPicker: HTMLElement | null = null;
+
+function closePlanPicker(): void {
+  planPicker?.remove();
+  planPicker = null;
+  document.removeEventListener('mousedown', onOutsidePickerClick);
+  document.removeEventListener('keydown', onPickerKey);
+}
+
+function onOutsidePickerClick(event: MouseEvent): void {
+  if (planPicker && event.target instanceof Node && !planPicker.contains(event.target)
+      && !loadBtn.contains(event.target)) {
+    closePlanPicker();
+  }
+}
+
+function onPickerKey(event: KeyboardEvent): void {
+  if (event.key === 'Escape') closePlanPicker();
+}
+
+loadBtn.addEventListener('click', () => {
+  if (planPicker) {
+    closePlanPicker();
+    return;
+  }
+  void (async () => {
+    let plans;
+    try {
+      plans = await listFloorPlans();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'неизвестная ошибка';
+      showStatus(`Не удалось получить список планов: ${message}`, true);
+      return;
+    }
+    if (plans.length === 0) {
+      showStatus('На сервере нет сохранённых планов', true);
+      return;
+    }
+
+    const picker = document.createElement('div');
+    picker.className = 'plan-picker';
+    picker.setAttribute('role', 'listbox');
+    picker.setAttribute('aria-label', 'Сохранённые планы');
+    for (const plan of plans) {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'plan-picker-item';
+      item.setAttribute('role', 'option');
+      if (plan.id === currentFloorPlanId) item.classList.add('current');
+      const updated = new Date(plan.updated_at).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' });
+      const title = document.createElement('span');
+      title.textContent = plan.name;
+      const meta = document.createElement('small');
+      meta.textContent = `№ ${plan.id} · изм. ${updated}`;
+      item.append(title, meta);
+      item.addEventListener('click', () => {
+        closePlanPicker();
+        void openPlan(plan.id, plan.name);
+      });
+      picker.append(item);
+    }
+
+    const rect = loadBtn.getBoundingClientRect();
+    picker.style.top = `${rect.bottom + 6}px`;
+    picker.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 328))}px`;
+    document.body.append(picker);
+    planPicker = picker;
+    picker.querySelector<HTMLButtonElement>('.plan-picker-item')?.focus();
+    document.addEventListener('mousedown', onOutsidePickerClick);
+    document.addEventListener('keydown', onPickerKey);
   })();
 });
 
-openPlanBtn.addEventListener('click', () => {
-  if (currentFloorPlanId === null) {
-    showSaveStatus('Ещё ничего не сохранено', true);
+// ─── Настройки плана (шестерёнка): название, новый план ──────────
+
+function closeSettings(): void {
+  settingsModal.classList.remove('active');
+}
+
+settingsBtn.addEventListener('click', () => {
+  planNameInput.value = currentFloorPlanName ?? '';
+  settingsModal.classList.add('active');
+  planNameInput.focus();
+});
+settingsModal.querySelector<HTMLButtonElement>('.close-modal')!.addEventListener('click', closeSettings);
+settingsModal.addEventListener('mousedown', (event) => {
+  if (event.target === settingsModal) closeSettings();
+});
+
+$<HTMLButtonElement>('#btn-rename-plan').addEventListener('click', () => {
+  const name = planNameInput.value.trim();
+  if (!name) {
+    planNameInput.focus();
     return;
   }
-  const planId = currentFloorPlanId;
-  void (async () => {
-    try {
-      const scene = await loadFloorPlan(planId);
-      canvas.loadScene(scene);
-      showSaveStatus('Открыто', false);
-    } catch (error) {
-      // 404 значит "этого плана больше нет на сервере" — держаться за его id
-      // дальше бессмысленно, кнопка будет упираться в тот же несуществующий
-      // план до ручной очистки localStorage.
-      if (error instanceof FloorPlanApiError && error.status === 404) {
-        currentFloorPlanId = null;
-        localStorage.removeItem(FLOOR_PLAN_ID_STORAGE_KEY);
-      }
-      const message = error instanceof Error ? error.message : 'неизвестная ошибка';
-      showSaveStatus(`Не удалось открыть: ${message}`, true);
-    }
-  })();
+  closeSettings();
+  if (currentFloorPlanId === null) {
+    rememberPlan(null, name);
+    showStatus('Название задано — сохраните план', false);
+  } else {
+    void savePlan(name);
+  }
 });
+
+$<HTMLButtonElement>('#btn-new-plan').addEventListener('click', () => {
+  if (!window.confirm('Начать новый план? Несохранённые изменения текущего пропадут.')) return;
+  const empty = canvas.serialize();
+  canvas.loadScene({ ...empty, nodes: [], segments: [], workspaces: [] });
+  rememberPlan(null, null);
+  selectedWall = null;
+  closeSettings();
+  setTool('select');
+  showStatus('Новый план', false);
+});
+
+// ─── Клавиатура ────────────────────────────────────────────────
 
 function isTypingInField(): boolean {
   const active = document.activeElement;
@@ -192,21 +423,58 @@ function isTypingInField(): boolean {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && settingsModal.classList.contains('active')) {
+    closeSettings();
+    return;
+  }
   if (isTypingInField()) {
     return;
+  }
+
+  if (canvas.getMode() === 'place-desk') {
+    // event.code — физическая клавиша: R работает и в русской раскладке (К).
+    if (event.code === 'KeyR') {
+      canvas.rotateDeskGhost();
+      return;
+    }
+    if (event.key === 'Escape') {
+      setTool('select');
+      return;
+    }
   }
 
   if (event.key === 'Delete' || event.key === 'Backspace') {
     event.preventDefault();
     canvas.removeSelected();
+    refreshSettingsPanel();
     return;
   }
 
   // event.key зависит от раскладки — при русской раскладке Ctrl+Z даёт
-  // key: 'я', а не 'z'. event.code — это физическая клавиша на клавиатуре,
-  // от раскладки не зависит. metaKey — тот же жест на macOS (⌘Z).
+  // key: 'я', а не 'z'. event.code — физическая клавиша, от раскладки не зависит.
   if ((event.ctrlKey || event.metaKey) && event.code === 'KeyZ') {
     event.preventDefault();
     canvas.undo();
+    refreshSettingsPanel();
   }
 });
+
+// ─── Старт ─────────────────────────────────────────────────────
+
+setTool('select');
+rememberPlan(currentFloorPlanId, currentFloorPlanName);
+
+// index.html?plan=N — открыть конкретный план сразу (ссылка из учётной части);
+// иначе — последний открытый на этом устройстве, если он ещё есть на сервере.
+const planFromUrl = Number(new URLSearchParams(location.search).get('plan'));
+const planToOpen = Number.isInteger(planFromUrl) && planFromUrl > 0 ? planFromUrl : currentFloorPlanId;
+if (planToOpen !== null) {
+  void listFloorPlans()
+    .then((plans) => {
+      const plan = plans.find((p) => p.id === planToOpen);
+      if (plan) void openPlan(plan.id, plan.name);
+      else if (planToOpen === planFromUrl) showStatus(`План № ${planToOpen} не найден`, true);
+      else rememberPlan(null, null);
+    })
+    .catch(() => showStatus('Сервер недоступен — можно чертить, сохранить не получится', true));
+}

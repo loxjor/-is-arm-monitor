@@ -211,9 +211,14 @@ async function fetchFloorPlan(url: string, init?: RequestInit): Promise<Response
  * вызывающий код обязан его запомнить (localStorage), иначе следующее
  * сохранение снова создаст новый план вместо обновления существующего.
  */
-export async function saveFloorPlan(scene: SceneData, existingId: number | null): Promise<number> {
+export async function saveFloorPlan(
+  scene: SceneData,
+  existingId: number | null,
+  // Имя открытого плана — иначе PUT молча переименовал бы его в «Мой план».
+  name: string = DEFAULT_PLAN_NAME,
+): Promise<number> {
   const payload = {
-    name: DEFAULT_PLAN_NAME,
+    name,
     width_cm: DEFAULT_SCENE_SIZE_CM,
     height_cm: DEFAULT_SCENE_SIZE_CM,
     background_image_url: null,
@@ -238,6 +243,21 @@ export async function saveFloorPlan(scene: SceneData, existingId: number | null)
 
   const data = (await response.json()) as FloorPlanResponse;
   return data.id;
+}
+
+export interface FloorPlanListItem {
+  id: number;
+  name: string;
+  updated_at: string;
+}
+
+/** Список сохранённых планов (без геометрии) — для выбора в «Открыть». */
+export async function listFloorPlans(): Promise<FloorPlanListItem[]> {
+  const response = await fetchFloorPlan(`${API_BASE_URL}/floor-plans`);
+  if (!response.ok) {
+    throw new FloorPlanApiError(await buildHttpErrorMessage(response), response.status);
+  }
+  return (await response.json()) as FloorPlanListItem[];
 }
 
 /** Загружает план и переводит его в формат SceneData (см. FloorPlanCanvas.loadScene). */

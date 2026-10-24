@@ -1,40 +1,158 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Asset Management System — план этажа</title>
-    <link rel="stylesheet" href="/src/styles.css" />
-  </head>
-  <body>
-    <div id="toolbar">
-      <button id="btn-select" type="button" class="active">Выбор / перемещение</button>
-      <button id="btn-draw-wall" type="button">Рисовать стены</button>
-      <label class="thickness-label">
-        Толщина стены, см
-        <input id="input-thickness" type="number" min="2" max="60" step="1" value="10" />
-      </label>
-      <label class="thickness-label" title="Длина выделенной стены по оси; Enter — применить">
-        Длина стены, см
-        <input id="input-length" class="length-input" type="number" min="3" max="10000" step="1" disabled />
-      </label>
-      <label id="btn-load-plan" class="file-button">
-        Загрузить план
-        <input id="input-plan" type="file" accept="image/*" hidden />
-      </label>
-      <span id="scale-readout" class="scale-readout">Масштаб: 100%</span>
-      <button id="btn-reset-view" type="button">Сбросить вид</button>
-      <div class="status-group">
-        Статус места:
-        <button id="btn-status-free" type="button" class="status-btn status-free">Свободно</button>
-        <button id="btn-status-occupied" type="button" class="status-btn status-occupied">Занято</button>
-        <button id="btn-status-reserved" type="button" class="status-btn status-reserved">Забронировано</button>
-      </div>
-      <button id="btn-save-plan" type="button">Сохранить</button>
-      <button id="btn-open-plan" type="button">Открыть</button>
-      <span id="save-status" class="save-status"></span>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Редактор плана этажа</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="editor-mode">
+    <!-- Холст -->
+    <div id="editor-canvas"></div>
+
+    <!-- Верх: сохранить, загрузить, печать -->
+    <div class="top-bar">
+        <button class="tool-btn" id="btn-save" type="button"><i class="fas fa-save"></i> Сохранить</button>
+        <button class="tool-btn" id="btn-load" type="button"><i class="fas fa-file-import"></i> Загрузить</button>
+        <button class="tool-btn" id="btn-print" type="button"><i class="fas fa-print"></i> Печать</button>
+        <span class="plan-title" id="plan-title"></span>
+        <span class="save-status" id="save-status" role="status" aria-live="polite"></span>
     </div>
-    <div id="app"></div>
+
+    <!-- Слева: инструменты -->
+    <div class="left-toolbar">
+        <button class="tool-btn sidebar-btn active" id="btn-cursor" type="button">
+            <i class="fas fa-mouse-pointer"></i>
+            <span>Выбрать</span>
+        </button>
+        <button class="tool-btn sidebar-btn" id="btn-wall" type="button">
+            <i class="fas fa-square"></i>
+            <span>Нарисовать стену</span>
+        </button>
+        <button class="tool-btn sidebar-btn" id="btn-desk" type="button">
+            <i class="fas fa-desktop"></i>
+            <span>Рабочее место</span>
+        </button>
+        <button class="tool-btn sidebar-btn" id="btn-window" type="button" disabled title="Окна — в разработке">
+            <i class="fas fa-window-maximize"></i>
+            <span>Добавить окно</span>
+        </button>
+        <button class="tool-btn sidebar-btn" id="btn-door" type="button" disabled title="Двери — в разработке">
+            <i class="fas fa-door-open"></i>
+            <span>Добавить дверь</span>
+        </button>
+    </div>
+
+    <!-- Настройки инструмента / выделенного объекта -->
+    <div id="tool-settings" class="tool-settings">
+        <!-- Толщина новой стены (инструмент «Стена») -->
+        <div id="settings-wall" class="settings-group" hidden>
+            <div class="setting-label">ТОЛЩИНА (СМ)</div>
+            <div class="setting-input-group">
+                <button class="setting-btn minus" type="button" aria-label="Тоньше"><i class="fas fa-minus"></i></button>
+                <input type="text" class="setting-value" value="10" readonly aria-label="Толщина новой стены, см">
+                <button class="setting-btn plus" type="button" aria-label="Толще"><i class="fas fa-plus"></i></button>
+            </div>
+            <div class="setting-presets">
+                <div class="preset-btn" role="button" tabindex="0">5</div>
+                <div class="preset-btn" role="button" tabindex="0">8</div>
+                <div class="preset-btn" role="button" tabindex="0">10</div>
+                <div class="preset-btn" role="button" tabindex="0">12</div>
+                <div class="preset-btn" role="button" tabindex="0">15</div>
+                <div class="preset-btn" role="button" tabindex="0">20</div>
+            </div>
+        </div>
+
+        <!-- Выделенная стена: длина и толщина -->
+        <div id="settings-selected-wall" class="settings-group" hidden>
+            <div class="setting-label">ДЛИНА (СМ)</div>
+            <div class="setting-input-group">
+                <input type="number" class="setting-value" id="input-length" min="1" step="1" aria-label="Длина выделенной стены, см">
+            </div>
+            <div class="setting-label">ТОЛЩИНА (СМ)</div>
+            <div class="setting-input-group">
+                <input type="number" class="setting-value" id="input-selected-thickness" min="2" max="60" step="1" aria-label="Толщина выделенной стены, см">
+            </div>
+        </div>
+
+        <!-- Выделенное рабочее место: статус -->
+        <div id="settings-desk" class="settings-group" hidden>
+            <div class="setting-label">СТАТУС МЕСТА</div>
+            <div class="setting-presets status-presets">
+                <div class="preset-btn status-free" role="button" tabindex="0" data-status="free">Свободно</div>
+                <div class="preset-btn status-occupied" role="button" tabindex="0" data-status="occupied">Занято</div>
+                <div class="preset-btn status-reserved" role="button" tabindex="0" data-status="reserved">Бронь</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Подсказка по текущему инструменту -->
+    <div class="canvas-hint" id="canvas-hint"></div>
+
+    <!-- Низ -->
+    <div class="bottom-panel">
+        <div class="panel-group">
+            <button class="tool-btn icon-only" id="btn-undo" type="button" title="Отменить (Ctrl+Z)"><i class="fas fa-undo"></i></button>
+            <button class="tool-btn icon-only" id="btn-redo" type="button" title="Повтор — в разработке" disabled><i class="fas fa-redo"></i></button>
+        </div>
+        <div class="panel-group">
+            <button class="tool-btn icon-only" id="btn-delete" type="button" title="Удалить выделенное (Delete)"><i class="fas fa-trash"></i></button>
+        </div>
+        <div class="panel-group sliders-group">
+            <label class="toggle-switch" title="Подсказки">
+                <input type="checkbox" id="hints-toggle" checked>
+                <span class="slider"></span>
+                <span class="label-text">Подсказки</span>
+            </label>
+            <label class="toggle-switch" title="Магниты: привязка к стенам и углам (то же, что без Shift)">
+                <input type="checkbox" id="snap-toggle" checked>
+                <span class="slider"></span>
+                <span class="label-text">Магниты</span>
+            </label>
+            <label class="toggle-switch" title="Размеры стен">
+                <input type="checkbox" id="dimensions-toggle" checked>
+                <span class="slider"></span>
+                <span class="label-text">Размеры</span>
+            </label>
+            <label class="toggle-switch" title="Тёмная тема">
+                <input type="checkbox" id="theme-toggle">
+                <span class="slider"></span>
+                <span class="label-text">Тема</span>
+            </label>
+        </div>
+        <div class="panel-group">
+            <label class="tool-btn icon-only" title="Подложка: изображение плана">
+                <i class="fas fa-image"></i>
+                <input type="file" id="input-background" accept="image/*" hidden>
+            </label>
+            <button class="tool-btn icon-only" id="btn-center" type="button" title="Показать весь план"><i class="fas fa-compress"></i></button>
+            <span class="scale-readout" id="scale-readout">100%</span>
+        </div>
+        <div class="panel-group">
+            <button class="tool-btn icon-only" id="btn-settings" type="button" title="План: название, новый план"><i class="fas fa-cog"></i></button>
+        </div>
+    </div>
+
+    <!-- Настройки плана -->
+    <div id="modal-settings" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-settings-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modal-settings-title">План</h2>
+                <button class="close-modal" type="button" aria-label="Закрыть">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-item">
+                    <label class="setting-label-inline" for="input-plan-name">Название плана</label>
+                    <input type="text" class="plan-name-input" id="input-plan-name" maxlength="255" placeholder="Новый план">
+                </div>
+                <div class="setting-item modal-actions">
+                    <button class="tool-btn" id="btn-rename-plan" type="button"><i class="fas fa-check"></i> Применить</button>
+                    <button class="tool-btn" id="btn-new-plan" type="button"><i class="fas fa-file"></i> Новый план</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
-  </body>
+</body>
 </html>
