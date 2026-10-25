@@ -4,132 +4,98 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Редактор плана этажа</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;700;900&display=swap">
 </head>
 <body class="editor-mode">
     <!-- Холст -->
     <div id="editor-canvas"></div>
 
-    <!-- Верх: сохранить, загрузить, печать -->
-    <div class="top-bar">
-        <button class="tool-btn" id="btn-save" type="button"><i class="fas fa-save"></i> Сохранить</button>
-        <button class="tool-btn" id="btn-load" type="button"><i class="fas fa-file-import"></i> Загрузить</button>
-        <button class="tool-btn" id="btn-print" type="button"><i class="fas fa-print"></i> Печать</button>
+    <!-- Верх: план и действия с ним -->
+    <header class="top-bar">
+        <a class="editor-brand" href="/admin.html"><span class="arm-tree-mark"></span>АРМ Монитор</a>
         <span class="plan-title" id="plan-title"></span>
-        <span class="save-status" id="save-status" role="status" aria-live="polite"></span>
-    </div>
+        <div class="chip-row">
+            <button class="arm-btn" id="btn-save" type="button">Сохранить</button>
+            <button class="arm-btn arm-btn-light" id="btn-load" type="button">Открыть план</button>
+            <button class="arm-btn arm-btn-light" id="btn-print" type="button">Печать</button>
+        </div>
+        <span class="save-status t-caption" id="save-status" role="status" aria-live="polite"></span>
+    </header>
 
     <!-- Слева: инструменты -->
-    <div class="left-toolbar">
-        <button class="tool-btn sidebar-btn active" id="btn-cursor" type="button">
-            <i class="fas fa-mouse-pointer"></i>
-            <span>Выбрать</span>
-        </button>
-        <button class="tool-btn sidebar-btn" id="btn-wall" type="button">
-            <i class="fas fa-square"></i>
-            <span>Нарисовать стену</span>
-        </button>
-        <button class="tool-btn sidebar-btn" id="btn-desk" type="button">
-            <i class="fas fa-desktop"></i>
-            <span>Рабочее место</span>
-        </button>
-        <button class="tool-btn sidebar-btn" id="btn-window" type="button" disabled title="Окна — в разработке">
-            <i class="fas fa-window-maximize"></i>
-            <span>Добавить окно</span>
-        </button>
-        <button class="tool-btn sidebar-btn" id="btn-door" type="button" disabled title="Двери — в разработке">
-            <i class="fas fa-door-open"></i>
-            <span>Добавить дверь</span>
-        </button>
-    </div>
+    <nav class="left-toolbar" aria-label="Инструменты">
+        <button class="arm-chip" id="btn-cursor" type="button" aria-pressed="true">Выбрать</button>
+        <button class="arm-chip" id="btn-wall" type="button" aria-pressed="false">Стена</button>
+        <button class="arm-chip" id="btn-desk" type="button" aria-pressed="false">Рабочее место</button>
+        <button class="arm-chip" id="btn-window" type="button" aria-pressed="false" disabled title="Окна — в разработке">Окно</button>
+        <button class="arm-chip" id="btn-door" type="button" aria-pressed="false" disabled title="Двери — в разработке">Дверь</button>
+    </nav>
 
     <!-- Настройки инструмента / выделенного объекта -->
     <div id="tool-settings" class="tool-settings">
         <!-- Толщина новой стены (инструмент «Стена») -->
         <div id="settings-wall" class="settings-group" hidden>
-            <div class="setting-label">ТОЛЩИНА (СМ)</div>
+            <div class="setting-label">Толщина, см</div>
             <div class="setting-input-group">
-                <button class="setting-btn minus" type="button" aria-label="Тоньше"><i class="fas fa-minus"></i></button>
+                <button class="arm-btn arm-btn-light setting-btn minus" type="button" aria-label="Тоньше">−</button>
                 <input type="text" class="setting-value" value="10" readonly aria-label="Толщина новой стены, см">
-                <button class="setting-btn plus" type="button" aria-label="Толще"><i class="fas fa-plus"></i></button>
+                <button class="arm-btn arm-btn-light setting-btn plus" type="button" aria-label="Толще">+</button>
             </div>
-            <div class="setting-presets">
-                <div class="preset-btn" role="button" tabindex="0">5</div>
-                <div class="preset-btn" role="button" tabindex="0">8</div>
-                <div class="preset-btn" role="button" tabindex="0">10</div>
-                <div class="preset-btn" role="button" tabindex="0">12</div>
-                <div class="preset-btn" role="button" tabindex="0">15</div>
-                <div class="preset-btn" role="button" tabindex="0">20</div>
+            <div class="chip-row setting-presets">
+                <button class="arm-chip preset-btn" type="button">5</button>
+                <button class="arm-chip preset-btn" type="button">8</button>
+                <button class="arm-chip preset-btn" type="button">10</button>
+                <button class="arm-chip preset-btn" type="button">12</button>
+                <button class="arm-chip preset-btn" type="button">15</button>
+                <button class="arm-chip preset-btn" type="button">20</button>
             </div>
         </div>
 
         <!-- Выделенная стена: длина и толщина -->
         <div id="settings-selected-wall" class="settings-group" hidden>
-            <div class="setting-label">ДЛИНА (СМ)</div>
-            <div class="setting-input-group">
-                <input type="number" class="setting-value" id="input-length" min="1" step="1" aria-label="Длина выделенной стены, см">
-            </div>
-            <div class="setting-label">ТОЛЩИНА (СМ)</div>
-            <div class="setting-input-group">
-                <input type="number" class="setting-value" id="input-selected-thickness" min="2" max="60" step="1" aria-label="Толщина выделенной стены, см">
-            </div>
+            <label class="setting-label" for="input-length">Длина, см</label>
+            <input type="number" class="setting-value" id="input-length" min="1" step="1">
+            <label class="setting-label" for="input-selected-thickness">Толщина, см</label>
+            <input type="number" class="setting-value" id="input-selected-thickness" min="2" max="60" step="1">
         </div>
 
         <!-- Выделенное рабочее место: статус -->
         <div id="settings-desk" class="settings-group" hidden>
-            <div class="setting-label">СТАТУС МЕСТА</div>
-            <div class="setting-presets status-presets">
-                <div class="preset-btn status-free" role="button" tabindex="0" data-status="free">Свободно</div>
-                <div class="preset-btn status-occupied" role="button" tabindex="0" data-status="occupied">Занято</div>
-                <div class="preset-btn status-reserved" role="button" tabindex="0" data-status="reserved">Бронь</div>
+            <div class="setting-label">Статус места</div>
+            <div class="status-presets" role="group" aria-label="Статус места">
+                <button class="arm-status arm-status-free preset-btn" type="button" data-status="free" aria-pressed="false">Свободно</button>
+                <button class="arm-status arm-status-occupied preset-btn" type="button" data-status="occupied" aria-pressed="false">Занято</button>
+                <button class="arm-status arm-status-reserved preset-btn" type="button" data-status="reserved" aria-pressed="false">Бронь</button>
             </div>
         </div>
     </div>
 
     <!-- Подсказка по текущему инструменту -->
-    <div class="canvas-hint" id="canvas-hint"></div>
+    <div class="canvas-hint t-caption" id="canvas-hint"></div>
 
     <!-- Низ -->
     <div class="bottom-panel">
-        <div class="panel-group">
-            <button class="tool-btn icon-only" id="btn-undo" type="button" title="Отменить (Ctrl+Z)"><i class="fas fa-undo"></i></button>
-            <button class="tool-btn icon-only" id="btn-redo" type="button" title="Повтор — в разработке" disabled><i class="fas fa-redo"></i></button>
+        <div class="chip-row">
+            <button class="arm-btn arm-btn-light" id="btn-undo" type="button" title="Ctrl+Z">Отменить</button>
+            <button class="arm-btn arm-btn-light" id="btn-redo" type="button" disabled title="В разработке">Повторить</button>
+            <button class="arm-btn arm-btn-danger" id="btn-delete" type="button" title="Delete">Удалить</button>
         </div>
-        <div class="panel-group">
-            <button class="tool-btn icon-only" id="btn-delete" type="button" title="Удалить выделенное (Delete)"><i class="fas fa-trash"></i></button>
+        <div class="chip-row" role="group" aria-label="Вид">
+            <button class="arm-chip" id="hints-toggle" type="button" aria-pressed="true">Подсказки</button>
+            <button class="arm-chip" id="snap-toggle" type="button" aria-pressed="true" title="Привязка к стенам и углам (то же, что без Shift)">Магниты</button>
+            <button class="arm-chip" id="dimensions-toggle" type="button" aria-pressed="true">Размеры</button>
+            <button class="arm-chip" id="theme-toggle" type="button" aria-pressed="false">Тёмная тема</button>
         </div>
-        <div class="panel-group sliders-group">
-            <label class="toggle-switch" title="Подсказки">
-                <input type="checkbox" id="hints-toggle" checked>
-                <span class="slider"></span>
-                <span class="label-text">Подсказки</span>
+        <div class="chip-row">
+            <label class="arm-btn arm-btn-light file-btn">
+                Подложка
+                <input type="file" id="input-background" accept="image/*">
             </label>
-            <label class="toggle-switch" title="Магниты: привязка к стенам и углам (то же, что без Shift)">
-                <input type="checkbox" id="snap-toggle" checked>
-                <span class="slider"></span>
-                <span class="label-text">Магниты</span>
-            </label>
-            <label class="toggle-switch" title="Размеры стен">
-                <input type="checkbox" id="dimensions-toggle" checked>
-                <span class="slider"></span>
-                <span class="label-text">Размеры</span>
-            </label>
-            <label class="toggle-switch" title="Тёмная тема">
-                <input type="checkbox" id="theme-toggle">
-                <span class="slider"></span>
-                <span class="label-text">Тема</span>
-            </label>
-        </div>
-        <div class="panel-group">
-            <label class="tool-btn icon-only" title="Подложка: изображение плана">
-                <i class="fas fa-image"></i>
-                <input type="file" id="input-background" accept="image/*" hidden>
-            </label>
-            <button class="tool-btn icon-only" id="btn-center" type="button" title="Показать весь план"><i class="fas fa-compress"></i></button>
-            <span class="scale-readout" id="scale-readout">100%</span>
-        </div>
-        <div class="panel-group">
-            <button class="tool-btn icon-only" id="btn-settings" type="button" title="План: название, новый план"><i class="fas fa-cog"></i></button>
+            <button class="arm-btn arm-btn-light" id="btn-center" type="button">Весь план</button>
+            <span class="scale-readout t-label" id="scale-readout">100%</span>
+            <button class="arm-btn arm-btn-light" id="btn-settings" type="button">План</button>
         </div>
     </div>
 
@@ -138,16 +104,14 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h2 id="modal-settings-title">План</h2>
-                <button class="close-modal" type="button" aria-label="Закрыть">&times;</button>
+                <button class="arm-btn arm-btn-light close-modal" type="button">Закрыть</button>
             </div>
             <div class="modal-body">
-                <div class="setting-item">
-                    <label class="setting-label-inline" for="input-plan-name">Название плана</label>
-                    <input type="text" class="plan-name-input" id="input-plan-name" maxlength="255" placeholder="Новый план">
-                </div>
-                <div class="setting-item modal-actions">
-                    <button class="tool-btn" id="btn-rename-plan" type="button"><i class="fas fa-check"></i> Применить</button>
-                    <button class="tool-btn" id="btn-new-plan" type="button"><i class="fas fa-file"></i> Новый план</button>
+                <label class="setting-label" for="input-plan-name">Название плана</label>
+                <input type="text" class="plan-name-input" id="input-plan-name" maxlength="255" placeholder="Новый план">
+                <div class="chip-row modal-actions">
+                    <button class="arm-btn" id="btn-rename-plan" type="button">Применить</button>
+                    <button class="arm-btn arm-btn-light" id="btn-new-plan" type="button">Новый план</button>
                 </div>
             </div>
         </div>

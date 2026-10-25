@@ -1,3 +1,4 @@
+import { ChipGroup } from '../../design/components';
 import { ApiError, api } from '../api/client';
 import type { CatalogRecord, Page } from '../api/types';
 import { can } from '../auth';
@@ -7,7 +8,7 @@ import { Form } from '../ui/Form';
 import { Modal, confirmDialog } from '../ui/Modal';
 import { dash, h } from '../ui/dom';
 import { errorMessage, toast } from '../ui/toast';
-import type { CatalogColumn, CatalogDef } from './catalogDefs';
+import { CATALOG_DEFS, type CatalogColumn, type CatalogDef } from './catalogDefs';
 import type { Screen } from './Screen';
 
 const PAGE_SIZE = 50;
@@ -38,13 +39,22 @@ export class CatalogScreen implements Screen {
       }, 300);
     });
 
+    // В меню один пункт «Справочники» — между самими справочниками переключает ряд таблеток.
+    const switcher = new ChipGroup<string>(
+      'Справочник',
+      CATALOG_DEFS.map((d) => ({ value: d.path, label: d.title })),
+      def.path,
+      (path) => (location.hash = `#/catalogs/${path}`),
+    );
+
     this.element = h(
       'div',
       null,
+      h('div', { class: 'filters' }, switcher.element),
       h('div', { class: 'page-head' },
         h('h1', null, def.title),
         this.editable
-          ? h('button', { type: 'button', class: 'btn btn--primary', onclick: () => this.openForm(null) }, `+ Добавить ${def.singular}`)
+          ? h('button', { type: 'button', class: 'arm-btn', onclick: () => this.openForm(null) }, `Добавить ${def.singular}`)
           : null,
       ),
       h('div', { class: 'filters' }, this.search, this.editable ? h('span', { class: 'muted small' }, 'Нажмите на строку, чтобы изменить или удалить') : null),

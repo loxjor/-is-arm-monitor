@@ -86,11 +86,11 @@ export class Pager {
     this.element.replaceChildren(
       h('span', null, `${from}–${to} из ${total}`),
       h('button', {
-        type: 'button', class: 'btn btn--plain btn--small', disabled: this.offset === 0,
+        type: 'button', class: 'arm-btn arm-btn-light', disabled: this.offset === 0,
         'aria-label': 'Предыдущая страница', onclick: () => this.go(this.offset - this.limit),
       }, '‹'),
       h('button', {
-        type: 'button', class: 'btn btn--plain btn--small', disabled: to >= total,
+        type: 'button', class: 'arm-btn arm-btn-light', disabled: to >= total,
         'aria-label': 'Следующая страница', onclick: () => this.go(this.offset + this.limit),
       }, '›'),
     );

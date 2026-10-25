@@ -9,12 +9,12 @@ export class LoginScreen {
     const loginInput = h('input', { name: 'login', autocomplete: 'username', required: true, autofocus: true });
     const passwordInput = h('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true });
     const error = h('div', { class: 'form-error', role: 'alert' });
-    const submit = h('button', { type: 'submit', class: 'btn btn--primary btn--wide' }, 'Войти');
+    const submit = h('button', { type: 'submit', class: 'arm-btn btn-wide' }, 'Войти');
 
     const form = h(
       'form',
       { class: 'login-card' },
-      h('div', { class: 'login-brand' }, h('span', { class: 'logo' }, 'АРМ'), h('span', null, 'АРМ-Монитор')),
+      h('div', { class: 'login-brand' }, h('span', { class: 'arm-tree-mark' }), h('span', null, 'АРМ Монитор')),
       h('p', { class: 'login-sub' }, 'Учёт автоматизированных рабочих мест'),
       error,
       h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Логин'), loginInput),

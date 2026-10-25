@@ -2,18 +2,18 @@ import Konva from 'konva';
 import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
 import { cmToPx, pxToCm } from '../utils/scale';
 import { rectCorners, type Point } from '../utils/deskCollision';
+import { palette, withAlpha } from '../theme';
 
-// Вид стола — как в интерфейсе workplace-map (DeskTool.createDeskShape):
-// столешница, полоска-монитор, подпись и точка статуса.
-const STATUS_STYLE: Record<WorkspaceStatus, { fill: string; stroke: string; monitor: string; dot: string }> = {
-  free: { fill: '#e8f5e9', stroke: '#4caf50', monitor: '#81c784', dot: '#4caf50' },
-  occupied: { fill: '#ffebee', stroke: '#f44336', monitor: '#e57373', dot: '#f44336' },
-  // В исходнике бронь отличалась только точкой — обводка тоже оранжевая,
-  // чтобы бронь читалась на плане без приближения.
-  reserved: { fill: '#fff3e0', stroke: '#fb8c00', monitor: '#ffb74d', dot: '#ff9800' },
-};
+// Вид стола — по дизайн-системе: радиус radius-md; свободный — обводка
+// status-free на surface, занятый и бронь — заливка статусным цветом с
+// подписью on-accent. Цвета читаются из токенов (theme.ts) при каждой смене темы.
+function statusStyle(status: WorkspaceStatus): { fill: string; stroke: string; text: string } {
+  const p = palette();
+  if (status === 'free') return { fill: p.surface, stroke: p['status-free'], text: p.ink };
+  const color = status === 'occupied' ? p['status-occupied'] : p['status-reserved'];
+  return { fill: color, stroke: color, text: p['on-accent'] };
+}
 
-const COLLISION_STROKE = '#d32f2f';
 const MONITOR_WIDTH_PX = 40;
 const MONITOR_HEIGHT_PX = 6;
 
@@ -32,7 +32,7 @@ export class Workspace {
   private rect: Konva.Rect;
   private monitor: Konva.Rect;
   private label: Konva.Text;
-  private statusDot: Konva.Circle;
+  private colliding = false;
   private status: WorkspaceStatus;
 
   constructor(data: WorkspaceData, onSelect: (workspace: Workspace) => void) {
@@ -51,22 +51,19 @@ export class Workspace {
       width: cmToPx(data.width),
       height: cmToPx(data.height),
       strokeWidth: 2,
-      cornerRadius: 4,
     });
     this.monitor = new Konva.Rect({ height: MONITOR_HEIGHT_PX, cornerRadius: 2, listening: false });
     this.label = new Konva.Text({
       text: data.label,
       fontSize: 13,
-      fontFamily: 'Calibri, Arial, sans-serif',
-      fill: '#333333',
+      fontStyle: '500',
       align: 'center',
       verticalAlign: 'middle',
       listening: false,
     });
-    this.statusDot = new Konva.Circle({ radius: 4, stroke: '#ffffff', strokeWidth: 1, listening: false });
 
-    this.group.add(this.rect, this.monitor, this.label, this.statusDot);
-    this.applyStatusStyle();
+    this.group.add(this.rect, this.monitor, this.label);
+    this.applyTheme();
     this.layout();
 
     this.group.on('click tap', (event) => {
@@ -91,15 +88,27 @@ export class Workspace {
     this.label.width(width);
     this.label.height(Math.max(0, height - labelTop));
 
-    this.statusDot.position({ x: width - 8, y: 8 });
   }
 
-  private applyStatusStyle(): void {
-    const style = STATUS_STYLE[this.status];
+  /** Перечитать цвета и шрифт из токенов — при создании и при смене темы. */
+  applyTheme(): void {
+    const p = palette();
+    const style = statusStyle(this.status);
     this.rect.fill(style.fill);
-    this.rect.stroke(style.stroke);
-    this.monitor.fill(style.monitor);
-    this.statusDot.fill(style.dot);
+    this.rect.cornerRadius(p.radiusMd);
+    this.monitor.fill(withAlpha(style.text, 0.35));
+    this.label.fill(style.text);
+    this.label.fontFamily(p.fontSans);
+    this.applyStroke();
+  }
+
+  private applyStroke(): void {
+    const p = palette();
+    const style = statusStyle(this.status);
+    // У занятого стола обводка того же цвета, что «столкновение», — тогда пунктир цвета ink.
+    const collisionColor = this.status === 'occupied' ? p.ink : p['status-occupied'];
+    this.rect.stroke(this.colliding ? collisionColor : style.stroke);
+    this.rect.dash(this.colliding ? [6, 4] : []);
   }
 
   sizePx(): { width: number; height: number } {
@@ -138,9 +147,10 @@ export class Workspace {
     );
   }
 
-  /** Красная обводка, пока стол тащат на занятое место (как призрак в workplace-map). */
+  /** Пунктирная обводка, пока стол упирается в стену или соседа. */
   setColliding(colliding: boolean): void {
-    this.rect.stroke(colliding ? COLLISION_STROKE : STATUS_STYLE[this.status].stroke);
+    this.colliding = colliding;
+    this.applyStroke();
   }
 
   setDraggable(draggable: boolean): void {
@@ -149,7 +159,7 @@ export class Workspace {
 
   setStatus(status: WorkspaceStatus): void {
     this.status = status;
-    this.applyStatusStyle();
+    this.applyTheme();
   }
 
   toData(): WorkspaceData {

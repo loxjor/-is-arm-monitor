@@ -1,3 +1,4 @@
+import { StatusBadge } from '../../design/components';
 import { ApiError, api } from '../api/client';
 import type { Role, Scalar, User } from '../api/types';
 import { currentUser } from '../auth';
@@ -21,7 +22,7 @@ export class UsersScreen implements Screen {
         { title: 'Логин', render: (u) => h('strong', null, u.login) },
         { title: 'Сотрудник', render: (u) => u.employee.full_name },
         { title: 'Роль', render: (u) => u.role.name },
-        { title: 'Состояние', render: (u) => (u.is_active ? h('span', { class: 'badge badge--in_use' }, 'Активен') : h('span', { class: 'badge badge--written_off' }, 'Заблокирован')) },
+        { title: 'Состояние', render: (u) => (u.is_active ? StatusBadge('free', 'Активен') : StatusBadge('neutral', 'Заблокирован')) },
         { title: 'Последний вход', render: (u) => formatDate(u.last_login_at) },
       ],
       { onRowClick: (user) => this.openEdit(user) },
@@ -31,7 +32,7 @@ export class UsersScreen implements Screen {
       null,
       h('div', { class: 'page-head' },
         h('h1', null, this.title),
-        h('button', { type: 'button', class: 'btn btn--primary', onclick: () => this.openCreate() }, '+ Новый пользователь'),
+        h('button', { type: 'button', class: 'arm-btn', onclick: () => this.openCreate() }, 'Новый пользователь'),
       ),
       h('p', { class: 'muted' }, 'Учётные записи не удаляются — их блокируют. Нажмите на строку, чтобы сменить роль, заблокировать или сбросить пароль.'),
       this.table.element,

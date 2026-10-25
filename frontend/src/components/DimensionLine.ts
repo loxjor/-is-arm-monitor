@@ -1,8 +1,7 @@
 import Konva from 'konva';
 import type { WallEndpoint } from '../utils/geometry';
+import { palette } from '../theme';
 
-const LINE_COLOR = '#6b7280';
-const TEXT_COLOR = '#1f2430';
 const FONT_SIZE = 11;
 // Экранные пиксели — делятся на масштаб сцены в update(), чтобы размерная
 // линия выглядела одинаково при любом зуме.
@@ -24,12 +23,20 @@ export class DimensionLine {
 
   constructor() {
     this.group = new Konva.Group({ listening: false });
-    const lineAttrs = { stroke: LINE_COLOR, strokeWidth: 1, strokeScaleEnabled: false };
+    const lineAttrs = { strokeWidth: 1, strokeScaleEnabled: false };
     this.line = new Konva.Line(lineAttrs);
     this.tickStart = new Konva.Line(lineAttrs);
     this.tickEnd = new Konva.Line(lineAttrs);
-    this.label = new Konva.Text({ fontSize: FONT_SIZE, fill: TEXT_COLOR });
+    this.label = new Konva.Text({ fontSize: FONT_SIZE });
     this.group.add(this.line, this.tickStart, this.tickEnd, this.label);
+    this.applyTheme();
+  }
+
+  applyTheme(): void {
+    const p = palette();
+    [this.line, this.tickStart, this.tickEnd].forEach((line) => line.stroke(p['line-strong']));
+    this.label.fill(p['ink-muted']);
+    this.label.fontFamily(p.fontSans);
   }
 
   /** from/to — концы грани (px сцены), outward — единичная нормаль наружу грани, text — подпись. */

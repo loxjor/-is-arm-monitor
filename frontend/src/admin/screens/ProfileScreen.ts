@@ -1,3 +1,4 @@
+import { SpecRow, SpecTile } from '../../design/components';
 import { api } from '../api/client';
 import type { EquipmentListItem, PersonBrief, Profile } from '../api/types';
 import { can } from '../auth';
@@ -23,11 +24,18 @@ function initials(fullName: string): string {
 }
 
 function equipmentTile(item: EquipmentListItem): HTMLElement {
-  return h('a', { class: 'equipment-tile', href: `#/equipment/${item.equipment_id}` },
-    h('strong', null, item.type_name),
-    h('span', null, `${item.manufacturer_name} ${item.model_name}`),
-    h('span', { class: 'muted small' }, `Инв. № ${item.inventory_no}${item.hostname ? ` · ${item.hostname}` : ''}`),
-    h('span', null, statusBadge(item.status)),
+  // Строка каталога: слева описание, справа плитки характеристик и статус.
+  return h('a', { class: 'catalog-row', href: `#/equipment/${item.equipment_id}` },
+    h('div', { class: 'catalog-main' },
+      h('strong', null, item.type_name),
+      h('div', { class: 'muted' }, `${item.manufacturer_name} ${item.model_name}`),
+    ),
+    SpecRow([
+      SpecTile(item.inventory_no, 'Инв. номер'),
+      ...(item.hostname ? [SpecTile(item.hostname, 'Сетевое имя')] : []),
+      ...(item.os_name ? [SpecTile(item.os_name, 'ОС')] : []),
+    ]),
+    statusBadge(item.status),
   );
 }
 
@@ -87,13 +95,13 @@ export class ProfileScreen implements Screen {
         h('div', { class: 'section-head' },
           h('h2', null, `Техника на моём АРМ (${profile.equipment.length})`),
           h('div', { class: 'actions' },
-            h('a', { class: 'btn btn--plain btn--small', href: '#/tickets' },
+            h('a', { class: 'arm-btn arm-btn-light', href: '#/tickets' },
               profile.open_tickets ? `Мои заявки · открыто ${profile.open_tickets}` : 'Мои заявки'),
-            can('create_tickets') ? h('a', { class: 'btn btn--primary btn--small', href: '#/tickets/new' }, 'Создать заявку') : null,
+            can('create_tickets') ? h('a', { class: 'arm-btn', href: '#/tickets/new' }, 'Создать заявку') : null,
           ),
         ),
         profile.equipment.length
-          ? h('div', { class: 'equipment-cards' }, profile.equipment.map(equipmentTile))
+          ? h('div', { class: 'catalog' }, profile.equipment.map(equipmentTile))
           : h('p', { class: 'muted' }, 'За вами пока не закреплено оборудование.'),
       ),
     );

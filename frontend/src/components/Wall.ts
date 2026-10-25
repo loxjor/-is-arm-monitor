@@ -5,9 +5,8 @@ import { getWallHatchPattern } from '../utils/hatchPattern';
 import type { WallEndpoint } from '../utils/geometry';
 import { faceDimensions } from '../utils/wallEdit';
 import { DimensionLine } from './DimensionLine';
+import { palette } from '../theme';
 
-const WALL_STROKE = '#2b2b2b';
-const WALL_SELECTED_STROKE = '#1976d2';
 // Грань короче сантиметра — это срез острого угла или вырожденный стык,
 // подпись "0" или "1" на ней только засоряет чертёж.
 const MIN_DIMENSION_CM = 1;
@@ -44,6 +43,7 @@ export class Wall {
   private polygon: WallEndpoint[] = [];
   private axisStart: WallEndpoint | null = null;
   private axisEnd: WallEndpoint | null = null;
+  private selected = false;
 
   constructor(segment: WallSegment, onSelect: (wall: Wall) => void) {
     this.faceDimensionLines.forEach((dimension) => this.dimensionGroup.add(dimension.group));
@@ -56,12 +56,12 @@ export class Wall {
       id: segment.id,
       points: [],
       closed: true,
-      fillPatternImage: getWallHatchPattern(),
       fillPatternRepeat: 'repeat',
-      stroke: WALL_STROKE,
       strokeWidth: 1,
       draggable: true,
     });
+
+    this.applyTheme();
 
     this.line.on('click tap', (event) => {
       event.cancelBubble = true;
@@ -107,6 +107,13 @@ export class Wall {
     });
   }
 
+  /** Штриховка и обводка — из токенов текущей темы (стена — ink, выбранная — accent). */
+  applyTheme(): void {
+    this.line.fillPatternImage(getWallHatchPattern());
+    this.line.stroke(this.selected ? palette().accent : palette().ink);
+    this.faceDimensionLines.forEach((dimension) => dimension.applyTheme());
+  }
+
   destroy(): void {
     this.line.destroy();
     this.dimensionGroup.destroy();
@@ -117,7 +124,8 @@ export class Wall {
   }
 
   setSelected(selected: boolean): void {
-    this.line.stroke(selected ? WALL_SELECTED_STROKE : WALL_STROKE);
+    this.selected = selected;
+    this.line.stroke(selected ? palette().accent : palette().ink);
     this.line.strokeWidth(selected ? 2 : 1);
   }
 

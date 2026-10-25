@@ -17,6 +17,7 @@ import { generateId } from '../utils/id';
 import { polygonsOverlap, rectCorners, shrinkRect, type Point as DeskPoint } from '../utils/deskCollision';
 import { PIXELS_PER_CM, cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
+import { onThemeChange, palette, withAlpha } from '../theme';
 import { GRID_MAJOR_EVERY, GRID_MINOR_SPACING_PX, getGridTilePattern } from '../utils/grid';
 import {
   type WallEndpoint,
@@ -263,6 +264,7 @@ export class FloorPlanCanvas {
   private wallSnapIndicator: Konva.Circle | null = null;
   private wallGhost: Konva.Rect | null = null;
   private readonly resizeObserver: ResizeObserver;
+  private readonly unsubscribeTheme: () => void;
   private snapEnabled = true;
   private deskGhost: Konva.Rect | null = null;
   private deskGhostRotation = 0;
@@ -360,6 +362,7 @@ export class FloorPlanCanvas {
       this.stage.batchDraw();
     });
     this.resizeObserver.observe(this.stage.container());
+    this.unsubscribeTheme = onThemeChange(() => this.applyTheme());
 
     // Пока рисуем стену, курсор мог уйти за пределы холста без отпускания
     // кнопки (её отпустят уже на window — см. handleWindowPointerUp) —
@@ -528,7 +531,7 @@ export class FloorPlanCanvas {
       this.gridLayer.add(
         new Konva.Line({
           points: [x, origin, x, extent],
-          stroke: '#c3c6cd',
+          stroke: palette().line,
           strokeWidth: 1,
           listening: false,
         }),
@@ -538,7 +541,7 @@ export class FloorPlanCanvas {
       this.gridLayer.add(
         new Konva.Line({
           points: [origin, y, extent, y],
-          stroke: '#c3c6cd',
+          stroke: palette().line,
           strokeWidth: 1,
           listening: false,
         }),
@@ -668,11 +671,9 @@ export class FloorPlanCanvas {
       this.deskGhost = new Konva.Rect({
         width: cmToPx(DESK_PLACEMENT_SIZE_CM.width),
         height: cmToPx(DESK_PLACEMENT_SIZE_CM.height),
-        fill: 'rgba(76, 175, 80, 0.2)',
-        stroke: '#4caf50',
         strokeWidth: 2,
         dash: [6, 3],
-        cornerRadius: 4,
+        cornerRadius: palette().radiusMd,
         opacity: 0.8,
         listening: false,
       });
@@ -682,8 +683,9 @@ export class FloorPlanCanvas {
     const blocked = this.deskCollides(this.ghostCornersPx(topLeft));
     this.deskGhost.position(topLeft);
     this.deskGhost.rotation(this.deskGhostRotation);
-    this.deskGhost.fill(blocked ? 'rgba(244, 67, 54, 0.2)' : 'rgba(76, 175, 80, 0.2)');
-    this.deskGhost.stroke(blocked ? '#f44336' : '#4caf50');
+    const ghostColor = blocked ? palette()['status-occupied'] : palette()['status-free'];
+    this.deskGhost.fill(withAlpha(ghostColor, 0.2));
+    this.deskGhost.stroke(ghostColor);
     this.deskGhost.visible(true);
     this.mainLayer.batchDraw();
   }
@@ -764,6 +766,7 @@ export class FloorPlanCanvas {
     window.removeEventListener('mousemove', this.handlePanMove);
     window.removeEventListener('mouseup', this.handlePanEnd);
     this.resizeObserver.disconnect();
+    this.unsubscribeTheme();
     this.stage.destroy();
   }
 
@@ -1009,6 +1012,21 @@ export class FloorPlanCanvas {
    * ручки/кнопки выделенной стены. Плюс тулбар узнаёт новые длину/толщину
    * выделенной стены — геометрия только что могла поменяться.
    */
+  /** Смена темы (или загрузка шрифта): всё, что нарисовано цветами токенов, перекрашивается. */
+  private applyTheme(): void {
+    this.gridLayer.destroyChildren();
+    this.drawGrid();
+    this.gridMinorRect?.visible(this.stage.scaleX() > GRID_MINOR_VISIBLE_ABOVE_SCALE);
+    this.walls.forEach((wall) => wall.applyTheme());
+    this.workspaces.forEach((workspace) => workspace.applyTheme());
+    this.wallControls.applyTheme();
+    this.deskSelection.update();
+    this.deskGhost?.destroy();
+    this.deskGhost = null;
+    this.renderWallOverlays();
+    this.stage.batchDraw();
+  }
+
   private renderWallOverlays(): void {
     const scale = this.stage.scaleX();
     this.walls.forEach((wall) => wall.renderDimensions(scale));
@@ -2193,7 +2211,7 @@ export class FloorPlanCanvas {
       x: pos.x,
       y: pos.y,
       radius: GUIDE_HIGHLIGHT_RADIUS_PX / scale,
-      fill: 'rgba(76, 175, 80, 0.15)',
+      fill: withAlpha(palette().accent, 0.15),
       listening: false,
     });
     this.wallDrawEndSector = startHit.endSector;
@@ -2212,7 +2230,7 @@ export class FloorPlanCanvas {
         radius: (GUIDE_HIGHLIGHT_RADIUS_PX * 1.4) / scale,
         angle: 360 - 2 * END_SECTOR_LIMIT_DEG,
         rotation: baseDeg + END_SECTOR_LIMIT_DEG,
-        fill: 'rgba(220, 53, 69, 0.22)',
+        fill: withAlpha(palette()['status-occupied'], 0.22),
         listening: false,
       });
       this.structureLayer.add(this.forbiddenWedge);
@@ -2224,7 +2242,7 @@ export class FloorPlanCanvas {
       const dy = Math.sin(rad) * guideLength;
       return new Konva.Line({
         points: [pos.x - dx, pos.y - dy, pos.x + dx, pos.y + dy],
-        stroke: '#57c15c',
+        stroke: palette().accent,
         strokeWidth: 1,
         dash: [6, 6],
         opacity: 0.4,
@@ -2247,7 +2265,7 @@ export class FloorPlanCanvas {
       rotation: stubAngleDeg,
       fillPatternImage: getWallHatchPattern(),
       fillPatternRepeat: 'repeat',
-      stroke: '#3a3a3a',
+      stroke: palette().ink,
       strokeWidth: 1,
       listening: false,
     });
@@ -2255,13 +2273,15 @@ export class FloorPlanCanvas {
       text: '0',
       fontSize: 13,
       fontStyle: 'bold',
-      fill: '#1f2430',
+      fill: palette().ink,
+      fontFamily: palette().fontSans,
       listening: false,
     });
     this.wallThicknessLabel = new Konva.Text({
       text: `${this.wallThicknessCm}`,
       fontSize: 13,
-      fill: '#1f2430',
+      fill: palette().ink,
+      fontFamily: palette().fontSans,
       listening: false,
     });
     this.structureLayer.add(this.wallPreview, this.wallLengthLabel, this.wallThicknessLabel);
@@ -2522,7 +2542,7 @@ export class FloorPlanCanvas {
             align.point.x + line.dir.x * overshoot,
             align.point.y + line.dir.y * overshoot,
           ],
-          stroke: 'rgba(33, 150, 243, 0.9)',
+          stroke: palette().accent,
           strokeWidth: 1 / scale,
           dash: [6 / scale, 4 / scale],
           listening: false,
@@ -2531,7 +2551,7 @@ export class FloorPlanCanvas {
           x: line.origin.x,
           y: line.origin.y,
           radius: 4 / scale,
-          fill: 'rgba(33, 150, 243, 0.9)',
+          fill: palette().accent,
           listening: false,
         }),
       );
@@ -2553,7 +2573,7 @@ export class FloorPlanCanvas {
         new Konva.Line({
           points: room.polygon.flatMap((p) => [p.x, p.y]),
           closed: true,
-          fill: 'rgba(76, 175, 80, 0.12)',
+          fill: withAlpha(palette().surface, 0.7),
           listening: false,
         }),
       );
@@ -2561,7 +2581,8 @@ export class FloorPlanCanvas {
       const label = new Konva.Text({
         text: `${areaM2.toFixed(2)} м²`,
         fontSize: 14 / scale,
-        fill: '#2e7d32',
+        fill: palette()['ink-muted'],
+        fontFamily: palette().fontSans,
         listening: false,
       });
       const c = polygonCentroid(room.polygon);
@@ -2618,7 +2639,7 @@ export class FloorPlanCanvas {
   /** Подсвечивает активную направляющую и точку начала, когда магнетизм сработал. */
   private updateGuideHighlight(snappedGuideDeg: number | null): void {
     this.guideHighlight?.fill(
-      snappedGuideDeg !== null ? 'rgba(76, 175, 80, 0.28)' : 'rgba(76, 175, 80, 0.15)',
+      withAlpha(palette().accent, snappedGuideDeg !== null ? 0.28 : 0.15),
     );
 
     this.guideAnglesDeg.forEach((guideAngle, index) => {
@@ -2629,7 +2650,7 @@ export class FloorPlanCanvas {
       // Направляющая — прямая, 0° и 180° одна и та же линия.
       const difference = (((snappedGuideDeg ?? 0) - guideAngle) % 180 + 180) % 180;
       const isActive = snappedGuideDeg !== null && (difference < 1e-6 || 180 - difference < 1e-6);
-      line.stroke(isActive ? '#2e7d32' : '#57c15c');
+      line.stroke(palette().accent);
       line.strokeWidth(isActive ? 1.5 : 1);
       line.opacity(isActive ? 0.9 : 0.4);
     });
@@ -2645,9 +2666,9 @@ export class FloorPlanCanvas {
 
     if (!this.wallSnapIndicator) {
       this.wallSnapIndicator = new Konva.Circle({
-        stroke: '#1976d2',
+        stroke: palette().accent,
         strokeWidth: 2,
-        fill: '#ffffff',
+        fill: palette().surface,
         listening: false,
       });
       this.structureLayer.add(this.wallSnapIndicator);
@@ -2681,7 +2702,7 @@ export class FloorPlanCanvas {
         fillPatternImage: getWallHatchPattern(),
         fillPatternRepeat: 'repeat',
         opacity: 0.55,
-        stroke: '#3a3a3a',
+        stroke: palette().ink,
         strokeWidth: 1,
         dash: [3, 3],
         listening: false,

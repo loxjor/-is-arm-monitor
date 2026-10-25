@@ -1,4 +1,5 @@
 import type { AssignmentRecord, EquipmentStatus, TicketPriority, TicketStatus, TicketType } from './api/types';
+import { StatusBadge, type StatusKind } from '../design/components';
 import { h } from './ui/dom';
 
 export const STATUS_LABELS: Record<EquipmentStatus, string> = {
@@ -11,8 +12,18 @@ export const STATUS_LABELS: Record<EquipmentStatus, string> = {
 
 export const STATUS_ORDER: EquipmentStatus[] = ['in_use', 'in_stock', 'in_repair', 'pending_writeoff', 'written_off'];
 
+// В системе три статусных цвета: «свободно» — то, что можно выдать, «занято» —
+// в работе у сотрудника, «бронь» (синий бренда) — требует внимания службы.
+const EQUIPMENT_STATUS_KIND: Record<EquipmentStatus, StatusKind> = {
+  in_stock: 'free',
+  in_use: 'occupied',
+  in_repair: 'reserved',
+  pending_writeoff: 'neutral',
+  written_off: 'neutral',
+};
+
 export function statusBadge(status: EquipmentStatus): HTMLElement {
-  return h('span', { class: `badge badge--${status}` }, STATUS_LABELS[status]);
+  return StatusBadge(EQUIPMENT_STATUS_KIND[status], STATUS_LABELS[status]);
 }
 
 export const OPERATION_LABELS: Record<AssignmentRecord['operation'], string> = {
@@ -72,10 +83,18 @@ export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
 
 export const TICKET_STATUS_ORDER: TicketStatus[] = ['new', 'in_progress', 'done', 'closed', 'rejected'];
 
+const TICKET_STATUS_KIND: Record<TicketStatus, StatusKind> = {
+  new: 'reserved',
+  in_progress: 'occupied',
+  done: 'free',
+  closed: 'neutral',
+  rejected: 'neutral',
+};
+
 export function ticketBadge(status: TicketStatus): HTMLElement {
-  return h('span', { class: `badge badge--t-${status}` }, TICKET_STATUS_LABELS[status]);
+  return StatusBadge(TICKET_STATUS_KIND[status], TICKET_STATUS_LABELS[status]);
 }
 
 export function priorityMark(priority: TicketPriority): HTMLElement | string {
-  return priority === 'high' ? h('span', { class: 'text-danger' }, '▲ Высокий') : TICKET_PRIORITY_LABELS[priority];
+  return priority === 'high' ? h('strong', { class: 'text-danger' }, 'Высокий') : TICKET_PRIORITY_LABELS[priority];
 }

@@ -1,600 +1,223 @@
-:root {
-    /* --bg-app: #e0e0e0; */
-    --bg-panel: #ffffff;
-    --bg-canvas: #f2f2f2; /* Greyer canvas */
-    --text-main: #333333;
-    --border-main: #dddddd;
-    --btn-bg: #f8f9fa;
-    --btn-hover: #e9ecef;
-    --icon-color: #333333;
-    --grid-color: #e0e0e0; /* Darker grid for contrast */
-}
+/* Редактор плана этажа. Цвета, отступы и радиусы — только токены дизайн-системы
+   (styles/tokens.css); теней нет — панели отделяются от холста фоном ground-deep. */
 
-body.dark-theme {
-    --bg-app: #1a1a1a;
-    --bg-panel: #2d2d2d;
-    --bg-canvas: #222222;
-    --text-main: #e0e0e0;
-    --border-main: #444444;
-    --btn-bg: #333333;
-    --btn-hover: #444444;
-    --icon-color: #e0e0e0;
-    --grid-color: #333333;
-}
-
-body {
-    font-family: 'Roboto', sans-serif;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-    background-color: #f4f7f6;
-    color: #333;
-}
-
-.container {
-    text-align: center;
-    background-color: white;
-    padding: 2rem;
-    border-radius: 10px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-    max-width: 90%;
-    width: 500px;
-}
-
-h1 {
-    font-size: 2.5rem;
-    margin-bottom: 1rem;
-    color: #2c3e50;
-}
-
-p {
-    font-size: 1.1rem;
-    color: #7f8c8d;
-    margin-bottom: 2rem;
-    line-height: 1.6;
-}
-
-.illustration {
-    margin: 2rem 0;
-}
-
-.illustration svg {
-    animation: rotate 10s linear infinite;
-}
-
-@keyframes rotate {
-    from {
-        transform: rotate(0deg);
-    }
-    to {
-        transform: rotate(360deg);
-    }
-}
-
-.btn {
-    display: inline-block;
-    padding: 10px 20px;
-    background-color: #3498db;
-    color: white;
-    text-decoration: none;
-    border-radius: 5px;
-    transition: background-color 0.3s;
-    font-weight: bold;
-    margin-top: 1rem;
-}
-
-.btn:hover {
-    background-color: #2980b9;
-}
-
-.footer-text {
-    font-size: 0.9rem;
-    color: #bdc3c7;
-    margin-top: 2rem;
-    margin-bottom: 0;
-}
-
-/* Editor Styles */
-#app {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    overflow: hidden;
-    /* Grid Background Pattern */
-    background-color: #fff;
-    background-image: 
-        linear-gradient(to right, #f0f0f0 1px, transparent 1px),
-        linear-gradient(to bottom, #f0f0f0 1px, transparent 1px);
-    background-size: 20px 20px;
-}
-
-#planCanvas {
-    display: block;
-    width: 100%;
-    height: 100%;
-    cursor: default;
-}
-
-#planCanvas.active-tool {
-    cursor: crosshair;
-}
-
-.toolbar {
-    position: absolute;
-    top: 20px;
-    left: 20px;
-    background: rgba(255, 255, 255, 0.98);
-    padding: 15px;
-    border-radius: 8px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-    display: flex;
-    flex-direction: column;
-    z-index: 100;
-    width: 140px;
-}
-
-.tools-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.btn-tool {
-    padding: 8px 12px;
-    background-color: #fff;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    cursor: pointer;
-    font-family: inherit;
-    font-size: 0.95rem;
-    transition: all 0.2s;
-    color: #333;
-    text-align: center;
-}
-
-.btn-tool:hover {
-    background-color: #f5f5f5;
-    border-color: #bbb;
-}
-
-.btn-tool:active, .btn-tool.active {
-    background-color: #3498db;
-    color: white;
-    border-color: #2980b9;
-}
-
-.btn-danger {
-    color: #e74c3c;
-    border-color: #e74c3c;
-}
-
-.btn-danger:hover {
-    background-color: #e74c3c;
-    color: white;
-}
-
-.bottom-actions {
-    margin-top: 20px;
-    border-top: 1px solid #eee;
-    padding-top: 15px;
-}
-
-.btn-exit {
-    display: block;
-    text-decoration: none;
-    background-color: #f8f9fa;
-    color: #666;
-    border-color: #ddd;
-}
-
-/* Properties Panel */
-.properties-panel {
-    position: absolute;
-    top: 20px;
-    left: 190px;
-    background: rgba(255, 255, 255, 0.98);
-    padding: 15px;
-    border-radius: 8px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.15);
-    z-index: 100;
-    min-width: 160px;
-}
-
-.prop-group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.prop-group label {
-    font-weight: 500;
-    font-size: 0.9rem;
-    color: #555;
-}
-
-.input-row input {
-    padding: 6px;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    width: 100%;
-    box-sizing: border-box;
-}
-
-.presets {
-    display: flex;
-    gap: 5px;
-    flex-wrap: wrap;
-}
-
-.btn-preset {
-    padding: 4px 10px;
-    font-size: 0.85rem;
-    background: #f0f0f0;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    cursor: pointer;
-    color: #444;
-}
-
-.btn-preset:hover {
-    background: #e0e0e0;
-}
-
-/* --- ALFA 02 STYLES --- */
-
-/* Editor Overrides */
 body.editor-mode {
-    display: block; /* Override flex */
-    background-color: var(--bg-app);
     overflow: hidden;
-    color: var(--text-main);
 }
 
 #editor-canvas {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
+    inset: 0;
     overflow: hidden;
-    background-color: var(--bg-canvas);
-    /* Grid Background moved to Konva for infinite scroll support */
-    /*
-    background-image:
-        linear-gradient(to right, var(--grid-color) 1px, transparent 1px),
-        linear-gradient(to bottom, var(--grid-color) 1px, transparent 1px);
-    background-size: 20px 20px;
-    */
+    background: var(--ground);
     z-index: 0;
 }
 
-.top-bar {
+.top-bar,
+.left-toolbar,
+.tool-settings,
+.bottom-panel,
+.canvas-hint {
     position: absolute;
-    top: 0;
-    left: 0;
-    background: var(--bg-panel);
-    padding: 10px 20px;
-    border-radius: 0 0 10px 0;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
     z-index: 10;
-    display: flex;
-    gap: 10px;
+    background: var(--ground-deep);
+    border-radius: var(--radius-lg);
 }
+
+/* ─── Верх ───────────────────────────────────────────────────── */
+
+.top-bar {
+    top: var(--space-2);
+    left: var(--space-2);
+    right: var(--space-2);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-4);
+    padding: var(--space-2) var(--space-4);
+}
+
+.editor-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 11px;
+    line-height: 20px;
+    font-weight: 700;
+    color: var(--ink);
+    text-decoration: none;
+}
+
+.top-bar .plan-title {
+    font-size: 14px;
+    line-height: 18px;
+    font-weight: 700;
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.top-bar .save-status {
+    color: var(--ink-muted);
+}
+
+.top-bar .save-status.save-status-error {
+    color: var(--status-occupied);
+    font-weight: 700;
+}
+
+/* ─── Инструменты слева ─────────────────────────────────────── */
 
 .left-toolbar {
-    position: absolute;
-    top: 80px;
-    left: 0;
-    background: var(--bg-panel);
-    padding: 10px 0;
-    border-radius: 0 10px 10px 0;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    z-index: 10;
+    top: 76px;
+    left: var(--space-2);
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    width: 50px;
-    box-sizing: border-box;
-    overflow: hidden;
-    transition: width 0.3s ease;
+    align-items: stretch;
+    gap: var(--space-2);
+    padding: var(--space-3);
 }
 
-.left-toolbar:hover {
-    width: 220px;
+.left-toolbar .arm-chip {
+    justify-content: space-between;
 }
 
-/* Tool Settings Widget */
+.arm-chip:disabled {
+    background: var(--ground-deep);
+    color: var(--ink-faint);
+    cursor: default;
+}
+
+/* ─── Настройки инструмента / выделенного ───────────────────── */
+
 .tool-settings {
-    position: absolute;
-    top: 80px;
-    left: 60px;
-    width: 100px;
-    background: var(--bg-panel);
-    color: var(--text-main);
-    border: 1px solid var(--border-main);
-    border-radius: 4px;
-    padding: 9px;
-    box-shadow: 0 2px 10px var(--shadow-color);
+    top: 76px;
+    left: 168px;
+    width: 196px;
+    padding: var(--space-3);
     display: none;
-    z-index: 5;
+}
+
+.settings-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.settings-group[hidden] {
+    display: none;
 }
 
 .setting-label {
-    font-size: 10px;
-    color: var(--text-main);
-    opacity: 0.7;
-    margin-bottom: 5px;
-    text-align: center;
-    font-weight: bold;
+    display: block;
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--ink-muted);
 }
 
 .setting-input-group {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 7px;
-    background: var(--bg-app);
-    border-radius: 3px;
-    padding: 3px;
+    gap: var(--space-2);
 }
 
 .setting-btn {
-    width: 18px;
-    height: 18px;
-    background: #e74c3c;
-    border: none;
-    color: white;
-    cursor: pointer;
-    border-radius: 2px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 11px;
+    min-width: 32px;
 }
-
-.setting-btn.plus { background: #2ecc71; }
-.setting-btn:hover { opacity: 0.9; }
 
 .setting-value {
-    flex-grow: 1;
+    width: 100%;
     text-align: center;
-    font-weight: bold;
-    font-size: 12px;
-    border: none;
-    background: transparent;
-    color: var(--text-main);
-    width: 22px;
+    font-weight: 700;
 }
 
-.setting-presets {
+.setting-value[readonly] {
+    cursor: default;
+}
+
+.status-presets {
     display: flex;
     flex-wrap: wrap;
-    gap: 3px;
-    justify-content: center;
+    gap: var(--space-2);
 }
 
-.preset-btn {
-    background: var(--btn-bg);
-    color: var(--text-main);
-    border: 1px solid var(--border-main);
-    font-size: 10px;
-    padding: 3px 0;
-    border-radius: 2px;
+/* Статус-бейджи работают как переключатели: выбранный — обводка ink. */
+.status-presets .arm-status {
+    border: 0;
+    font-family: inherit;
+    letter-spacing: inherit;
     cursor: pointer;
-    width: 26px;
-    text-align: center;
 }
 
-.preset-btn:hover { background: var(--btn-hover); }
-
-.bottom-panel {
-    position: absolute;
-    bottom: 10px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: var(--bg-panel);
-    padding: 10px 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    z-index: 10;
-    display: flex;
-    gap: 20px;
-    align-items: center;
+.status-presets .arm-status[aria-pressed="true"] {
+    box-shadow: inset 0 0 0 2px var(--ink);
 }
 
-/* Enhanced Volumetric Styles - Panels & Interface */
+/* ─── Подсказка ─────────────────────────────────────────────── */
 
-.top-bar, .left-toolbar, .bottom-panel, .tool-settings, .modal-content, .properties-panel {
-    background: linear-gradient(to bottom, #ffffff 0%, #f7f9fa 100%); /* Subtle vertical gradient for depth */
-    box-shadow: 
-        0 8px 24px rgba(0,0,0,0.08), /* Softer, spread shadow */
-        0 2px 6px rgba(0,0,0,0.04), /* Crisp closer shadow */
-        inset 0 1px 0 rgba(255,255,255,0.9), /* Highlighting top edge */
-        inset 0 0 0 1px rgba(255,255,255,0.5); /* Inner light rim */
-    border: 1px solid #e1e4e8; /* Crisp border */
-    border-bottom: 1px solid #d1d5da; /* Slightly heavier bottom border for weight */
+.canvas-hint {
+    left: var(--space-2);
+    bottom: 76px;
+    max-width: 340px;
+    padding: var(--space-2) var(--space-3);
+    color: var(--ink-muted);
 }
 
-/* Specific adjustment for vertical sidebar? Linear gradient top-to-bottom works fine usually, but let's check */
-.left-toolbar {
-    background: linear-gradient(to right, #ffffff, #f7f9fa); /* Horizontal gradient for vertical bar */
-    border-right: 1px solid #d1d5da;
-    border-bottom: 1px solid #e1e4e8; /* Reset bottom heavy border */
-}
-
-.tool-btn {
-    background: #ffffff;
-    border: 1px solid #e0e0e0; 
-    border-bottom-color: #d6d6d6; 
-    box-shadow: 0 2px 5px rgba(0,0,0,0.03); 
-    padding: 8px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-    white-space: nowrap;
-    color: var(--text-main);
-}
-
-.tool-btn:hover {
-    background: #fafafa;
-    border-color: #d0d0d0;
-    transform: translateY(-2px); 
-    box-shadow: 0 4px 8px rgba(0,0,0,0.08); 
-}
-
-.tool-btn:active, .tool-btn.active {
-    background: #f1f3f5; 
-    border-color: #ced4da;
-    border-top-color: #bec5cb; 
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05); 
-    transform: translateY(1px); 
-    color: var(--text-main);
-}
-
-/* Sidebar buttons - keep distinct but add depth on hover */
-.sidebar-btn {
-    justify-content: flex-start;
-    padding: 10px 0 10px 15px; 
-    width: 100%;
-    overflow: hidden;
-    border: none;
-    background: transparent;
-    box-shadow: none; 
-    border-radius: 0;
-}
-
-.sidebar-btn:hover {
-    background: rgba(0,0,0,0.02); /* Very subtle darken */
-    box-shadow: none; 
-    transform: none;
-}
-
-/* BUT active sidebar button can have depth */
-.sidebar-btn.active {
-    background: #e8f5e9;
-    color: #2e7d32;
-    border-left: 4px solid #4CAF50;
-    padding-left: 11px;
-    box-shadow: inset 0 1px 3px rgba(0,0,0,0.03); 
-}
-
-.left-toolbar.force-collapse {
-    width: 50px !important;
-}
-
-.sidebar-btn i {
-    min-width: 20px;
-    text-align: center;
-}
-
-.sidebar-btn span {
-    opacity: 0;
-    margin-left: 10px;
-    transition: opacity 0.2s;
-    white-space: nowrap;
-}
-
-.left-toolbar:hover .sidebar-btn span {
-    opacity: 1;
-    transition-delay: 0.1s;
-}
-
-.tool-btn.icon-only {
-    padding: 8px 10px;
-}
-
-.panel-group {
-    display: flex;
-    gap: 5px;
-    align-items: center;
-    padding-right: 20px;
-    border-right: 1px solid #eee;
-}
-.panel-group:last-child {
-    border-right: none;
-    padding-right: 0;
-}
-
-/* Toggles */
-.sliders-group {
-    display: flex;
-    gap: 15px;
-}
-
-.toggle-switch {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    cursor: pointer;
-    user-select: none;
-    position: relative;
-}
-
-/* -- Restored / Fixed Content -- */
-.toggle-switch input {
+.canvas-hint[hidden] {
     display: none;
 }
 
-.slider {
+/* ─── Низ ───────────────────────────────────────────────────── */
+
+.bottom-panel {
+    bottom: var(--space-2);
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--space-2) var(--space-6);
+    padding: var(--space-2) var(--space-4);
+    /* left: 50% оставляет панели лишь половину ширины — без max-content она переносится в столбик */
+    width: max-content;
+    max-width: calc(100vw - 2 * var(--space-2));
+}
+
+.scale-readout {
+    min-width: 44px;
+    text-align: center;
+}
+
+/* Выбор файла подложки — светлая кнопка; прозрачный input поверх неё ловит клик и фокус. */
+.file-btn {
     position: relative;
-    display: inline-block;
-    width: 34px;
-    height: 20px;
-    background-color: #ccc;
-    transition: .4s;
-    border-radius: 34px;
 }
 
-.slider:before {
+.file-btn input {
     position: absolute;
-    content: "";
-    height: 14px;
-    width: 14px;
-    left: 3px;
-    bottom: 3px;
-    background-color: white;
-    transition: .4s;
-    border-radius: 50%;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
 }
 
-.toggle-switch input:checked + .slider {
-    background-color: #2196F3;
+.file-btn:focus-within {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
 }
 
-.toggle-switch input:focus + .slider {
-    box-shadow: 0 0 1px #2196F3;
-}
+/* ─── Окно «План» ───────────────────────────────────────────── */
 
-.toggle-switch input:checked + .slider:before {
-    transform: translateX(14px);
-}
-
-.label-text {
-    margin-left: 5px;
-}
-
-/* Modal Styles */
 .modal {
     display: none;
     position: fixed;
+    inset: 0;
     z-index: 1000;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0,0,0,0.5);
     align-items: center;
     justify-content: center;
+    padding: var(--space-4);
+    background: color-mix(in srgb, var(--ground-deep) 85%, transparent);
 }
 
 .modal.active {
@@ -602,426 +225,134 @@ body.editor-mode {
 }
 
 .modal-content {
-    background-color: var(--bg-panel);
-    color: var(--text-main);
-    padding: 20px;
-    border-radius: 10px;
-    width: 300px;
-    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    width: min(360px, 100%);
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
 }
 
 .modal-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    border-bottom: 1px solid var(--border-main);
-    margin-bottom: 15px;
-    padding-bottom: 10px;
+    gap: var(--space-4);
+    padding-bottom: var(--space-3);
+    margin-bottom: var(--space-4);
+    border-bottom: 1px solid var(--line);
 }
 
-.modal-header h2 {
-    margin: 0;
-    font-size: 1.2rem;
-}
-
-.close-modal {
-    background: none;
-    border: none;
-    font-size: 1.5rem;
-    color: var(--text-main);
-    cursor: pointer;
-}
-
-.setting-item {
-    margin: 15px 0;
-}
-
-.setting-label-inline {
-    display: block;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-main);
-    margin-bottom: 8px;
-}
-
-/* Mixer / Slider Control */
-.mixer-control {
-    position: relative;
-    padding: 8px 2px 0;
-}
-
-.mixer-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 100%;
-    height: 6px;
-    background: #d5d5d5;
-    border-radius: 3px;
-    outline: none;
-    cursor: pointer;
-    margin: 0;
-}
-
-/* Круглый ползунок в стиле проекта */
-.mixer-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 18px;
-    height: 18px;
-    background: #1976d2;
-    border: 2px solid #fff;
-    border-radius: 50%;
-    cursor: grab;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-    transition: transform 0.15s, box-shadow 0.15s;
-}
-
-.mixer-slider::-webkit-slider-thumb:hover {
-    transform: scale(1.15);
-    box-shadow: 0 2px 8px rgba(25, 118, 210, 0.4);
-}
-
-.mixer-slider::-webkit-slider-thumb:active {
-    cursor: grabbing;
-    transform: scale(1.05);
-    box-shadow: 0 1px 6px rgba(25, 118, 210, 0.5);
-}
-
-.mixer-slider::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
-    background: #1976d2;
-    border: 2px solid #fff;
-    border-radius: 50%;
-    cursor: grab;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-}
-
-.mixer-slider::-moz-range-track {
-    height: 6px;
-    background: #d5d5d5;
-    border-radius: 3px;
-    border: none;
-}
-
-.mixer-ticks {
-    display: flex;
-    justify-content: space-between;
-    padding: 5px 0 0 0;
-}
-
-.mixer-tick {
-    font-size: 10px;
-    color: #aaa;
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 3px;
-    transition: all 0.15s;
-    user-select: none;
-}
-
-.mixer-tick:hover {
-    color: var(--text-main);
-}
-
-.mixer-tick.active {
-    color: #1976d2;
-    font-weight: 600;
-}
-
-.mixer-value {
-    display: none;
-}
-
-/* Wall Length Input Overlay */
-.wall-length-input {
-    width: 65px;
-    padding: 4px 8px;
-    border: 2px solid #3498db;
-    border-radius: 4px;
-    font-size: 14px;
-    font-weight: bold;
-    text-align: center;
-    background: white;
-    box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-    outline: none;
-    color: #2c3e50;
-    transition: border-color 0.2s;
-}
-
-.wall-length-input:focus {
-    border-color: #2ecc71;
-}
-
-/* Wall Thickness Dropdown Overlay (ПКМ по стене в инструменте «Курсор») */
-.wall-thickness-menu {
+.modal-body {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    background: var(--bg-panel);
-    color: var(--text-main);
-    border: 1px solid var(--border-main);
-    border-radius: 4px;
-    padding: 4px;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-    min-width: 90px;
+    gap: var(--space-2);
 }
 
-.wall-thickness-menu-item {
-    padding: 6px 10px;
-    font-size: 12px;
-    text-align: center;
-    border-radius: 3px;
-    cursor: pointer;
+.modal-body .plan-name-input {
+    width: 100%;
 }
 
-.wall-thickness-menu-item:hover {
-    background: var(--btn-hover);
+.modal-body .modal-actions {
+    margin-top: var(--space-2);
 }
 
-.wall-thickness-menu-item.active {
-    background: #1976d2;
-    color: #fff;
-    font-weight: bold;
-}
+/* ─── Выбор плана в «Открыть план» ──────────────────────────── */
 
-/* ─────────────────────────────────────────────
-   Дополнительные стили — добавить в конец style.css
-   ───────────────────────────────────────────── */
-
-/* Уведомления */
-.notification {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    background: linear-gradient(to bottom, #ffffff, #f7f9fa);
-    color: #333;
-    padding: 12px 24px;
-    border-radius: 8px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.12);
-    border: 1px solid #e1e4e8;
-    z-index: 2000;
-    font-size: 14px;
-    font-family: 'Roboto', sans-serif;
-    animation: slideIn 0.3s ease;
-    transition: opacity 0.3s ease;
-}
-
-.notification.fade-out {
-    opacity: 0;
-}
-
-@keyframes slideIn {
-    from {
-        transform: translateX(100%);
-        opacity: 0;
-    }
-    to {
-        transform: translateX(0);
-        opacity: 1;
-    }
-}
-
-/* Неактивное состояние кнопок undo/redo */
-.tool-btn:disabled,
-.tool-btn[disabled] {
-    opacity: 0.35;
-    cursor: not-allowed;
-    pointer-events: none;
-}
-
-/* Настройка шага привязки углов */
-.setting-label-inline {
-    font-size: 13px;
-    color: #666;
-    margin-right: 10px;
-}
-
-.setting-select {
-    padding: 4px 8px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-    font-size: 13px;
-    background: #fff;
-    cursor: pointer;
-}
-
-.setting-item {
-    display: flex;
-    align-items: center;
-    margin-bottom: 12px;
-}
-
-/* Активное состояние кнопки рабочего места */
-.sidebar-btn#btn-desk.active {
-    background: #e3f2fd;
-    color: #1565c0;
-    border-left: 4px solid #2196F3;
-    padding-left: 11px;
-}
-
-/* ─────────────────────────────────────────────
-   Привязка интерфейса к движку FloorPlanCanvas (new-session-e1723f)
-   ───────────────────────────────────────────── */
-
-.top-bar .plan-title {
-    align-self: center;
-    font-weight: 600;
-    max-width: 280px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.top-bar .save-status {
-    align-self: center;
-    font-size: 13px;
-    color: #2e7d32;
-}
-
-.top-bar .save-status.save-status-error {
-    color: #c62828;
-}
-
-.tool-btn:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-}
-
-.tool-settings .setting-input-group input.setting-value[readonly] {
-    cursor: default;
-}
-
-.tool-settings .setting-input-group input.setting-value:not([readonly]) {
-    background: #fff;
-}
-
-.status-presets .preset-btn.status-free { border-color: #4caf50; color: #2e7d32; }
-.status-presets .preset-btn.status-occupied { border-color: #e53935; color: #c62828; }
-.status-presets .preset-btn.status-reserved { border-color: #fb8c00; color: #ef6c00; }
-
-.scale-readout {
-    font-size: 13px;
-    color: var(--text-main);
-    min-width: 52px;
-    text-align: center;
-}
-
-.canvas-hint {
-    position: absolute;
-    left: 12px;
-    /* над нижней панелью, а не под ней */
-    bottom: 76px;
-    z-index: 9;
-    max-width: 320px;
-    font-size: 12px;
-    line-height: 1.4;
-    color: var(--text-main);
-    background: var(--bg-panel);
-    border: 1px solid var(--border-main);
-    border-radius: 8px;
-    padding: 8px 10px;
-    opacity: 0.9;
-}
-
-.canvas-hint[hidden] {
-    display: none;
-}
-
-/* Выбор плана в «Загрузить» — всплывающий список под кнопкой. */
 .plan-picker {
     position: fixed;
     z-index: 50;
     width: 320px;
     max-height: 60vh;
     overflow-y: auto;
-    background: var(--bg-panel);
-    border: 1px solid var(--border-main);
-    border-radius: 8px;
-    box-shadow: 0 10px 30px rgba(20, 30, 50, 0.18);
-    padding: 4px;
+    background: var(--surface);
+    border-radius: var(--radius-md);
+    padding: var(--space-1);
+    /* граница вместо тени: список лежит поверх панели почти того же тона */
+    border: 1px solid var(--line-strong);
 }
 
 .plan-picker-item {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 2px;
     width: 100%;
     text-align: left;
     border: 0;
     background: none;
-    border-radius: 6px;
-    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    padding: var(--space-2) var(--space-3);
     font: inherit;
-    color: var(--text-main);
+    letter-spacing: inherit;
+    color: var(--ink);
     cursor: pointer;
 }
 
-.plan-picker-item:hover,
-.plan-picker-item:focus-visible {
-    background: var(--btn-hover);
-    outline: none;
+.plan-picker-item:hover {
+    background: var(--ground);
 }
 
 .plan-picker-item.current {
-    box-shadow: inset 3px 0 0 #2d6cdf;
+    background: var(--accent);
+    color: var(--on-accent);
 }
 
 .plan-picker-item small {
-    color: #6b7686;
+    font-size: 11px;
+    line-height: 15px;
+    color: inherit;
 }
 
-.modal-body .plan-name-input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 8px 10px;
-    border: 1px solid var(--border-main);
-    border-radius: 6px;
-    font: inherit;
-}
+/* ─── Нет доступа ───────────────────────────────────────────── */
 
-.modal-body .modal-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-@media print {
-    .top-bar, .left-toolbar, .bottom-panel, .tool-settings, .canvas-hint, .plan-picker {
-        display: none !important;
-    }
-}
-
-/* Редактор открыт без прав — плашка поверх всего, холст под ней недоступен. */
 .editor-lock {
     position: fixed;
     inset: 0;
     z-index: 2000;
     display: grid;
     place-items: center;
-    padding: 16px;
-    background: rgba(20, 30, 45, 0.55);
+    padding: var(--space-4);
+    background: color-mix(in srgb, var(--ground-deep) 92%, transparent);
 }
 
 .editor-lock-box {
     max-width: 420px;
-    background: var(--bg-panel);
-    color: var(--text-main);
-    border-radius: 10px;
-    padding: 22px 24px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+    background: var(--surface);
+    border-radius: var(--radius-lg);
+    padding: var(--space-6);
 }
 
 .editor-lock-box h2 {
-    margin: 0 0 8px;
-    font-size: 18px;
+    font-size: 21px;
+    line-height: 27px;
+    margin-bottom: var(--space-2);
 }
 
-.editor-lock-box .tool-btn {
-    display: inline-flex;
-    text-decoration: none;
-    margin-top: 6px;
+.editor-lock-box p {
+    color: var(--ink-muted);
+}
+
+/* ─── Узкий экран и печать ──────────────────────────────────── */
+
+@media (max-width: 720px) {
+    .left-toolbar {
+        top: auto;
+        bottom: 132px;
+        flex-direction: row;
+        flex-wrap: wrap;
+        right: var(--space-2);
+    }
+
+    .tool-settings {
+        top: 120px;
+        left: var(--space-2);
+    }
+
+    .canvas-hint {
+        display: none;
+    }
+}
+
+@media print {
+    .top-bar, .left-toolbar, .bottom-panel, .tool-settings, .canvas-hint, .plan-picker {
+        display: none !important;
+    }
 }

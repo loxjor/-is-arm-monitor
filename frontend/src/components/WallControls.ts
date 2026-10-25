@@ -1,6 +1,7 @@
 import Konva from 'konva';
 import type { WallEndpoint } from '../utils/geometry';
 import type { WallSide } from '../utils/wallEdit';
+import { palette } from '../theme';
 
 export type WallEnd = 'start' | 'end';
 
@@ -20,7 +21,6 @@ const BUTTON_RADIUS_PX = 7;
 // DimensionLine), и разнесены вдоль стены — иначе они её перекрывают.
 const BUTTON_OFFSET_FROM_FACE_PX = 34;
 const BUTTON_SPACING_ALONG_PX = 10;
-const ACCENT = '#e48423';
 
 interface ButtonLayout {
   start: WallEndpoint;
@@ -74,13 +74,19 @@ export class WallControls {
       });
     });
     this.group.add(this.handles.start, this.handles.end);
+    this.applyTheme();
+  }
+
+  /** Ручки и кнопки −/+ выделенной стены — accent на surface, как и прочее выделение. */
+  applyTheme(): void {
+    const p = palette();
+    this.group.find<Konva.Circle>('Circle').forEach((circle) => circle.setAttrs({ fill: p.surface, stroke: p.accent }));
+    this.group.find<Konva.Line>('Line').forEach((line) => line.stroke(p.accent));
   }
 
   private createHandle(end: WallEnd, callbacks: WallControlsCallbacks): Konva.Circle {
     const handle = new Konva.Circle({
       radius: HANDLE_RADIUS_PX,
-      fill: '#ffffff',
-      stroke: '#dc143c',
       strokeWidth: 2,
       strokeScaleEnabled: false,
       draggable: true,
@@ -108,8 +114,8 @@ export class WallControls {
   private createButton(direction: 1 | -1): Konva.Group {
     const group = new Konva.Group();
     const r = BUTTON_RADIUS_PX;
-    const lineAttrs = { stroke: ACCENT, strokeWidth: 2, lineCap: 'round' as const };
-    group.add(new Konva.Circle({ radius: r, fill: '#ffffff', stroke: ACCENT, strokeWidth: 2 }));
+    const lineAttrs = { strokeWidth: 2, lineCap: 'round' as const };
+    group.add(new Konva.Circle({ radius: r, strokeWidth: 2 }));
     group.add(new Konva.Line({ points: [-r / 2, 0, r / 2, 0], ...lineAttrs }));
     if (direction > 0) {
       group.add(new Konva.Line({ points: [0, -r / 2, 0, r / 2], ...lineAttrs }));

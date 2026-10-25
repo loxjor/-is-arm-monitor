@@ -1,4 +1,6 @@
-let cachedGridTile: HTMLImageElement | null = null;
+import { palette, withAlpha } from '../theme';
+
+const cachedTiles = new Map<string, HTMLImageElement>();
 
 export const GRID_MINOR_SPACING_PX = 40;
 export const GRID_MAJOR_EVERY = 5;
@@ -10,8 +12,11 @@ export const GRID_MAJOR_EVERY = 5;
  * бесшовный стык сложнее.
  */
 export function getGridTilePattern(): HTMLImageElement {
-  if (cachedGridTile) {
-    return cachedGridTile;
+  // Мелкая сетка — вполовину слабее волосяной линии line; кэш по цвету, т.к. он зависит от темы.
+  const color = withAlpha(palette().line, 0.5);
+  const cached = cachedTiles.get(color);
+  if (cached) {
+    return cached;
   }
 
   const size = GRID_MINOR_SPACING_PX;
@@ -21,7 +26,7 @@ export function getGridTilePattern(): HTMLImageElement {
 
   const ctx = canvas.getContext('2d');
   if (ctx) {
-    ctx.strokeStyle = '#dcdee3';
+    ctx.strokeStyle = color;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0.5, 0);
@@ -31,6 +36,7 @@ export function getGridTilePattern(): HTMLImageElement {
     ctx.stroke();
   }
 
-  cachedGridTile = canvas as unknown as HTMLImageElement;
-  return cachedGridTile;
+  const tile = canvas as unknown as HTMLImageElement;
+  cachedTiles.set(color, tile);
+  return tile;
 }

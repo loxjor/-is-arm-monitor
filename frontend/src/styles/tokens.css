@@ -1,0 +1,79 @@
+/* Токены дизайн-системы «АРМ Монитор» (project/tokens.json) — значения один в один. */
+
+:root {
+  --ground: #efe9dd;
+  --ground-deep: #e5dfd3;
+  --surface: #ffffff;
+  --surface-glass: rgba(255, 255, 255, 0.5);
+  --sky: #c1d7ef;
+  --ink: #000000;
+  --on-ink: #ffffff;
+  --ink-muted: #625f5a;
+  --ink-faint: rgba(0, 0, 0, 0.3);
+  --line: rgba(0, 0, 0, 0.12);
+  --line-strong: #8a8680;
+  --accent: #347190;
+  --on-accent: #ffffff;
+  --status-free: #2c7a4b;
+  --status-occupied: #b3471d;
+  --status-reserved: #347190;
+  --focus: #000000;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-10: 40px;
+  --radius-xs: 5px;
+  --radius-md: 12px;
+  --radius-lg: 24px;
+  --radius-pill: 50px;
+  --font-sans: "Golos Text", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: light;
+}
+
+/* Тёмная тема: по системной настройке, если тема не выбрана вручную… */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #1b1a17;
+    --ground-deep: #24221e;
+    --surface: #2d2b27;
+    --surface-glass: rgba(255, 255, 255, 0.07);
+    --sky: #26384a;
+    --ink: #f3efe7;
+    --on-ink: #14130f;
+    --ink-muted: #aaa59c;
+    --ink-faint: rgba(255, 255, 255, 0.32);
+    --line: rgba(255, 255, 255, 0.14);
+    --line-strong: #77736b;
+    --accent: #7cb4d1;
+    --on-accent: #0d1a21;
+    --status-free: #6cc896;
+    --status-occupied: #f0915f;
+    --status-reserved: #7cb4d1;
+    --focus: #f3efe7;
+    color-scheme: dark;
+  }
+}
+
+/* …или явно — переключателем темы (data-theme на <html>). */
+:root[data-theme="dark"] {
+  --ground: #1b1a17;
+  --ground-deep: #24221e;
+  --surface: #2d2b27;
+  --surface-glass: rgba(255, 255, 255, 0.07);
+  --sky: #26384a;
+  --ink: #f3efe7;
+  --on-ink: #14130f;
+  --ink-muted: #aaa59c;
+  --ink-faint: rgba(255, 255, 255, 0.32);
+  --line: rgba(255, 255, 255, 0.14);
+  --line-strong: #77736b;
+  --accent: #7cb4d1;
+  --on-accent: #0d1a21;
+  --status-free: #6cc896;
+  --status-occupied: #f0915f;
+  --status-reserved: #7cb4d1;
+  --focus: #f3efe7;
+  color-scheme: dark;
+}

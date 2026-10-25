@@ -1,3 +1,4 @@
+import { ChipGroup } from '../../design/components';
 import { api } from '../api/client';
 import type { EquipmentListItem, EquipmentStatus, Page } from '../api/types';
 import { can } from '../auth';
@@ -21,7 +22,7 @@ export class EquipmentListScreen implements Screen {
   private readonly table: DataTable<EquipmentListItem>;
   private readonly pager: Pager;
   private readonly search = h('input', { type: 'search', placeholder: 'Инв. номер, серийный, сетевое имя, IP', class: 'search' });
-  private readonly statusSelect = h('select', { 'aria-label': 'Статус' });
+  private readonly statusChips: ChipGroup<EquipmentStatus | ''>;
   private readonly typeSelect = h('select', { 'aria-label': 'Тип оборудования' });
   private readonly roomSelect = h('select', { 'aria-label': 'Помещение' });
   private readonly expiring = h('input', { type: 'checkbox' });
@@ -52,12 +53,16 @@ export class EquipmentListScreen implements Screen {
     );
     this.pager = new Pager(PAGE_SIZE, () => void this.load());
 
-    this.statusSelect.append(h('option', { value: '' }, 'Все статусы'),
-      ...STATUS_ORDER.map((status) => h('option', { value: status }, STATUS_LABELS[status])));
-    this.statusSelect.value = context.query.get('status') ?? '';
+    const presetStatus = STATUS_ORDER.find((status) => status === context.query.get('status')) ?? '';
+    this.statusChips = new ChipGroup<EquipmentStatus | ''>(
+      'Статус',
+      [{ value: '', label: 'Все' }, ...STATUS_ORDER.map((status) => ({ value: status, label: STATUS_LABELS[status] }))],
+      presetStatus,
+      () => this.reload(),
+    );
     this.expiring.checked = context.query.has('expiring');
 
-    for (const control of [this.statusSelect, this.typeSelect, this.roomSelect, this.expiring]) {
+    for (const control of [this.typeSelect, this.roomSelect, this.expiring]) {
       control.addEventListener('change', () => this.reload());
     }
     this.search.addEventListener('input', () => {
@@ -71,12 +76,13 @@ export class EquipmentListScreen implements Screen {
       h('div', { class: 'page-head' },
         h('h1', null, this.title),
         can('manage_equipment')
-          ? h('button', { type: 'button', class: 'btn btn--primary', onclick: () => this.openNew() }, '+ Поставить на учёт')
+          ? h('button', { type: 'button', class: 'arm-btn', onclick: () => this.openNew() }, 'Поставить на учёт')
           : null,
       ),
+      h('div', { class: 'filters' }, this.statusChips.element),
       h('div', { class: 'filters' },
         // Фильтры по справочникам — только тем, кому справочники доступны.
-        this.search, this.statusSelect, can('view_catalogs') ? [this.typeSelect, this.roomSelect] : null,
+        this.search, can('view_catalogs') ? [this.typeSelect, this.roomSelect] : null,
         h('label', { class: 'check' }, this.expiring, ' срок службы истекает в течение 12 мес.'),
       ),
       this.table.element,
@@ -118,7 +124,7 @@ export class EquipmentListScreen implements Screen {
     try {
       const page = await api.get<Page<EquipmentListItem>>('/equipment', {
         q: this.search.value.trim(),
-        status: this.statusSelect.value as EquipmentStatus | '',
+        status: this.statusChips.value,
         type_id: this.typeSelect.value,
         room_id: this.roomSelect.value,
         expiring_within_months: this.expiring.checked ? 12 : null,

@@ -1,5 +1,6 @@
+import { ChipGroup } from '../../design/components';
 import { api } from '../api/client';
-import type { Page, TicketListItem } from '../api/types';
+import type { Page, TicketListItem, TicketStatus } from '../api/types';
 import { can } from '../auth';
 import { TICKET_STATUS_LABELS, TICKET_STATUS_ORDER, TICKET_TYPE_LABELS, priorityMark, ticketBadge } from '../labels';
 import { DataTable, Pager } from '../ui/DataTable';
@@ -14,7 +15,7 @@ export class TicketListScreen implements Screen {
   readonly element: HTMLElement;
   private readonly table: DataTable<TicketListItem>;
   private readonly pager: Pager;
-  private readonly statusSelect = h('select', { 'aria-label': 'Статус' });
+  private readonly statusChips: ChipGroup<TicketStatus | ''>;
   private readonly typeSelect = h('select', { 'aria-label': 'Тип заявки' });
   private readonly mine = h('input', { type: 'checkbox' });
   private requestNo = 0;
@@ -36,13 +37,20 @@ export class TicketListScreen implements Screen {
     );
     this.pager = new Pager(PAGE_SIZE, () => void this.load());
 
-    this.statusSelect.append(h('option', { value: '' }, 'Все статусы'),
-      ...TICKET_STATUS_ORDER.map((status) => h('option', { value: status }, TICKET_STATUS_LABELS[status])));
-    this.statusSelect.value = context.query.get('status') ?? '';
+    const presetStatus = TICKET_STATUS_ORDER.find((status) => status === context.query.get('status')) ?? '';
+    this.statusChips = new ChipGroup<TicketStatus | ''>(
+      'Статус',
+      [{ value: '', label: 'Все' }, ...TICKET_STATUS_ORDER.map((status) => ({ value: status, label: TICKET_STATUS_LABELS[status] }))],
+      presetStatus,
+      () => {
+        this.pager.reset();
+        void this.load();
+      },
+    );
     this.typeSelect.append(h('option', { value: '' }, 'Все типы'),
       ...Object.entries(TICKET_TYPE_LABELS).map(([value, label]) => h('option', { value }, label)));
     this.mine.checked = context.query.has('mine');
-    for (const control of [this.statusSelect, this.typeSelect, this.mine]) {
+    for (const control of [this.typeSelect, this.mine]) {
       control.addEventListener('change', () => {
         this.pager.reset();
         void this.load();
@@ -54,10 +62,11 @@ export class TicketListScreen implements Screen {
       null,
       h('div', { class: 'page-head' },
         h('h1', null, this.title),
-        can('create_tickets') ? h('a', { class: 'btn btn--primary', href: '#/tickets/new' }, '+ Новая заявка') : null,
+        can('create_tickets') ? h('a', { class: 'arm-btn', href: '#/tickets/new' }, 'Новая заявка') : null,
       ),
+      h('div', { class: 'filters' }, this.statusChips.element),
       h('div', { class: 'filters' },
-        this.statusSelect, this.typeSelect,
+        this.typeSelect,
         can('process_tickets') ? h('label', { class: 'check' }, this.mine, ' назначенные мне') : null,
       ),
       this.table.element,
@@ -71,7 +80,7 @@ export class TicketListScreen implements Screen {
     this.table.setLoading();
     try {
       const page = await api.get<Page<TicketListItem>>('/tickets', {
-        status: this.statusSelect.value,
+        status: this.statusChips.value,
         ticket_type: this.typeSelect.value,
         assigned_to_me: this.mine.checked ? true : null,
         limit: PAGE_SIZE,

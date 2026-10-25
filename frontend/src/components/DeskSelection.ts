@@ -1,10 +1,10 @@
 import Konva from 'konva';
 import type { Workspace } from './Workspace';
+import { palette } from '../theme';
 
 const FRAME_PADDING_PX = 4;
 const HANDLE_OFFSET_PX = 30;
 const HANDLE_RADIUS_PX = 7;
-const ACCENT = '#1976d2';
 
 export interface DeskRotationCallbacks {
   /** Начало поворота ручкой — снимок для отмены. */
@@ -24,9 +24,11 @@ export interface DeskRotationCallbacks {
 export class DeskSelection {
   readonly group = new Konva.Group({ visible: false });
   private readonly body = new Konva.Group();
-  private readonly frame = new Konva.Rect({ stroke: ACCENT, dash: [6, 3], listening: false });
-  private readonly line = new Konva.Line({ stroke: ACCENT, dash: [4, 3], listening: false });
-  private readonly handle = new Konva.Circle({ fill: ACCENT, stroke: '#ffffff' });
+  private readonly frame = new Konva.Rect({ dash: [6, 3], listening: false });
+  private readonly line = new Konva.Line({ dash: [4, 3], listening: false });
+  private readonly handle = new Konva.Circle({});
+  private readonly angleTag = new Konva.Tag({ cornerRadius: 3 });
+  private readonly angleText = new Konva.Text({ padding: 4 });
   private readonly angleLabel = new Konva.Label({ visible: false, listening: false });
   private workspace: Workspace | null = null;
   private scale = 1;
@@ -37,10 +39,7 @@ export class DeskSelection {
     private readonly callbacks: DeskRotationCallbacks,
   ) {
     this.body.add(this.frame, this.line, this.handle);
-    this.angleLabel.add(
-      new Konva.Tag({ fill: ACCENT, cornerRadius: 3 }),
-      new Konva.Text({ fill: '#ffffff', padding: 4, fontFamily: 'Calibri, Arial, sans-serif' }),
-    );
+    this.angleLabel.add(this.angleTag, this.angleText);
     this.group.add(this.body, this.angleLabel);
 
     this.handle.on('mouseenter', () => (this.stage.container().style.cursor = 'grab'));
@@ -93,7 +92,14 @@ export class DeskSelection {
     if (!workspace) return;
     const { width, height } = workspace.sizePx();
     const k = 1 / this.scale;
+    const p = palette();
     const pad = FRAME_PADDING_PX * k;
+    // Выделение — accent; цвета берутся на каждом обновлении, так что смена темы подхватывается сама.
+    this.frame.stroke(p.accent);
+    this.line.stroke(p.accent);
+    this.handle.setAttrs({ fill: p.accent, stroke: p.surface });
+    this.angleTag.fill(p.accent);
+    this.angleText.setAttrs({ fill: p['on-accent'], fontFamily: p.fontSans });
     const offset = HANDLE_OFFSET_PX * k;
 
     this.body.position(workspace.group.position());
@@ -130,7 +136,7 @@ export class DeskSelection {
 
   private showAngle(angleDeg: number, pointer: { x: number; y: number }): void {
     const k = 1 / this.scale;
-    const text = this.angleLabel.getText() as Konva.Text;
+    const text = this.angleText;
     text.text(`${Math.round(angleDeg) % 360}°`);
     text.fontSize(12 * k);
     text.padding(4 * k);

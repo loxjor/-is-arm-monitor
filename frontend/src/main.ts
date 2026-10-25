@@ -1,3 +1,6 @@
+import './styles/tokens.css';
+import './styles/components.css';
+import './styles/base.css';
 import './style.css';
 import {
   DESK_PLACEMENT_SIZE_CM,
@@ -9,6 +12,9 @@ import { cm } from './utils/scale';
 import { generateId } from './utils/id';
 import type { WorkspaceStatus } from './types/workspace';
 import { FloorPlanApiError, listFloorPlans, loadFloorPlan, saveFloorPlan, sessionToken } from './api/floorPlans';
+import { currentTheme, initTheme, onThemeChange, setTheme } from './theme';
+
+initTheme();
 
 // Интерфейс — из ветки workplace-map (верхняя/левая/нижняя панели), движок
 // черчения — FloorPlanCanvas. Холст занимает весь экран, панели поверх него.
@@ -26,7 +32,6 @@ const saveStatus = $<HTMLSpanElement>('#save-status');
 const cursorBtn = $<HTMLButtonElement>('#btn-cursor');
 const wallBtn = $<HTMLButtonElement>('#btn-wall');
 const deskBtn = $<HTMLButtonElement>('#btn-desk');
-const leftToolbar = $<HTMLElement>('.left-toolbar');
 
 const toolSettings = $<HTMLElement>('#tool-settings');
 const wallSettings = $<HTMLElement>('#settings-wall');
@@ -39,10 +44,10 @@ const deskSettings = $<HTMLElement>('#settings-desk');
 const hint = $<HTMLElement>('#canvas-hint');
 const undoBtn = $<HTMLButtonElement>('#btn-undo');
 const deleteBtn = $<HTMLButtonElement>('#btn-delete');
-const hintsToggle = $<HTMLInputElement>('#hints-toggle');
-const snapToggle = $<HTMLInputElement>('#snap-toggle');
-const dimensionsToggle = $<HTMLInputElement>('#dimensions-toggle');
-const themeToggle = $<HTMLInputElement>('#theme-toggle');
+const hintsToggle = $<HTMLButtonElement>('#hints-toggle');
+const snapToggle = $<HTMLButtonElement>('#snap-toggle');
+const dimensionsToggle = $<HTMLButtonElement>('#dimensions-toggle');
+const themeToggle = $<HTMLButtonElement>('#theme-toggle');
 const backgroundInput = $<HTMLInputElement>('#input-background');
 const centerBtn = $<HTMLButtonElement>('#btn-center');
 const scaleReadout = $<HTMLSpanElement>('#scale-readout');
@@ -68,12 +73,9 @@ let selectedWall: SelectedWallInfo | null = null;
 
 function setTool(mode: CanvasMode): void {
   canvas.setMode(mode);
-  cursorBtn.classList.toggle('active', mode === 'select');
-  wallBtn.classList.toggle('active', mode === 'draw-wall');
-  deskBtn.classList.toggle('active', mode === 'place-desk');
-  // Как в исходном интерфейсе: пока чертят стену, левая панель свёрнута,
-  // чтобы не закрывать холст рядом с панелью толщины.
-  leftToolbar.classList.toggle('force-collapse', mode === 'draw-wall');
+  cursorBtn.setAttribute('aria-pressed', String(mode === 'select'));
+  wallBtn.setAttribute('aria-pressed', String(mode === 'draw-wall'));
+  deskBtn.setAttribute('aria-pressed', String(mode === 'place-desk'));
   hint.textContent = HINTS[mode];
   refreshSettingsPanel();
 }
@@ -127,6 +129,10 @@ function refreshSettingsPanel(): void {
   if (showNewWall) {
     wallThicknessValue.value = String(canvas.getWallThickness());
   }
+  if (showDesk) {
+    const status = canvas.getWorkspace(selectedDeskId() ?? '')?.toData().status;
+    deskStatusButtons.forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.status === status)));
+  }
   if (showSelectedWall && selectedWall) {
     // Поле, в котором сейчас печатают, не трогаем — текст переписывался бы под курсором.
     if (document.activeElement !== lengthInput) lengthInput.value = String(Math.round(selectedWall.lengthCm));
@@ -146,12 +152,8 @@ $<HTMLButtonElement>('#settings-wall .setting-btn.minus').addEventListener('clic
 $<HTMLButtonElement>('#settings-wall .setting-btn.plus').addEventListener('click', () => {
   applyNewWallThickness(canvas.getWallThickness() + 1);
 });
-document.querySelectorAll<HTMLElement>('#settings-wall .preset-btn').forEach((preset) => {
-  const apply = () => applyNewWallThickness(Number(preset.textContent));
-  preset.addEventListener('click', apply);
-  preset.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') apply();
-  });
+document.querySelectorAll<HTMLButtonElement>('#settings-wall .preset-btn').forEach((preset) => {
+  preset.addEventListener('click', () => applyNewWallThickness(Number(preset.textContent)));
 });
 
 // Длину — только по change (Enter/уход из поля): промежуточное «1» при наборе
@@ -173,11 +175,11 @@ selectedThicknessInput.addEventListener('change', () => {
   selectedThicknessInput.value = String(selectedWall?.thicknessCm ?? canvas.getWallThickness());
 });
 
-document.querySelectorAll<HTMLElement>('#settings-desk .preset-btn').forEach((button) => {
-  const apply = () => canvas.setSelectedWorkspaceStatus(button.dataset.status as WorkspaceStatus);
-  button.addEventListener('click', apply);
-  button.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' || event.key === ' ') apply();
+const deskStatusButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#settings-desk .preset-btn'));
+deskStatusButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    canvas.setSelectedWorkspaceStatus(button.dataset.status as WorkspaceStatus);
+    refreshSettingsPanel();
   });
 });
 
@@ -200,14 +202,25 @@ deleteBtn.addEventListener('click', () => {
   refreshSettingsPanel();
 });
 
-hintsToggle.addEventListener('change', () => {
-  hint.hidden = !hintsToggle.checked;
+/** Таблетка-переключатель: состояние — в aria-pressed, его же читают скринридеры. */
+function bindToggle(button: HTMLButtonElement, onChange: (on: boolean) => void): void {
+  button.addEventListener('click', () => {
+    const on = button.getAttribute('aria-pressed') !== 'true';
+    button.setAttribute('aria-pressed', String(on));
+    onChange(on);
+  });
+}
+
+bindToggle(hintsToggle, (on) => {
+  hint.hidden = !on;
 });
-snapToggle.addEventListener('change', () => canvas.setSnapEnabled(snapToggle.checked));
-dimensionsToggle.addEventListener('change', () => canvas.setShowDimensions(dimensionsToggle.checked));
-themeToggle.addEventListener('change', () => {
-  document.body.classList.toggle('dark-theme', themeToggle.checked);
-});
+bindToggle(snapToggle, (on) => canvas.setSnapEnabled(on));
+bindToggle(dimensionsToggle, (on) => canvas.setShowDimensions(on));
+// Сцена перекрашивается сама (FloorPlanCanvas подписан на смену темы) — здесь только кнопка.
+bindToggle(themeToggle, (on) => setTheme(on ? 'dark' : 'light'));
+const syncThemeToggle = () => themeToggle.setAttribute('aria-pressed', String(currentTheme() === 'dark'));
+syncThemeToggle();
+onThemeChange(syncThemeToggle);
 
 backgroundInput.addEventListener('change', () => {
   const file = backgroundInput.files?.[0];
@@ -487,9 +500,9 @@ async function checkEditorAccess(): Promise<boolean> {
   const text = document.createElement('p');
   text.textContent = reason;
   const link = document.createElement('a');
-  link.className = 'tool-btn';
+  link.className = 'arm-btn';
   link.href = '/admin.html';
-  link.textContent = token ? 'Вернуться в АРМ-Монитор' : 'Войти';
+  link.textContent = token ? 'Вернуться в АРМ Монитор' : 'Войти';
   box.append(title, text, link);
   lock.append(box);
   document.body.append(lock);

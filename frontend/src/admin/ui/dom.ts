@@ -3,7 +3,7 @@ type Listener = (event: Event) => void;
 export type Attrs = Record<string, string | number | boolean | Listener | null | undefined>;
 
 /**
- * Создание элемента одной строкой: h('button', { class: 'btn', onclick: fn }, 'Текст').
+ * Создание элемента одной строкой: h('button', { class: 'arm-btn', onclick: fn }, 'Текст').
  * Ключи on* — обработчики событий; false/null/undefined — атрибут не ставится.
  */
 export function h<K extends keyof HTMLElementTagNameMap>(

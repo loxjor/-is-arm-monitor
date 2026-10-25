@@ -1,4 +1,6 @@
-let cachedPattern: HTMLCanvasElement | null = null;
+import { palette } from '../theme';
+
+const cachedPatterns = new Map<string, HTMLCanvasElement>();
 
 /**
  * Диагональная штриховка для отображения стен на плане (архитектурная
@@ -10,8 +12,12 @@ let cachedPattern: HTMLCanvasElement | null = null;
  * включая HTMLCanvasElement — поэтому тип приводится явно в месте вызова.
  */
 export function getWallHatchPattern(): HTMLImageElement {
-  if (cachedPattern) {
-    return cachedPattern as unknown as HTMLImageElement;
+  // Фон штриховки — ground-deep, штрихи — line-strong; кэш по паре цветов текущей темы.
+  const { 'ground-deep': fill, 'line-strong': stroke } = palette();
+  const key = `${fill}|${stroke}`;
+  const cached = cachedPatterns.get(key);
+  if (cached) {
+    return cached as unknown as HTMLImageElement;
   }
 
   const size = 10;
@@ -21,10 +27,10 @@ export function getWallHatchPattern(): HTMLImageElement {
 
   const ctx = canvas.getContext('2d');
   if (ctx) {
-    ctx.fillStyle = '#e9e9ec';
+    ctx.fillStyle = fill;
     ctx.fillRect(0, 0, size, size);
 
-    ctx.strokeStyle = '#8b8b91';
+    ctx.strokeStyle = stroke;
     ctx.lineWidth = 1.25;
     // Три параллельные диагонали (в т.ч. на краях тайла), чтобы штриховка
     // стыковалась бесшовно при fillPatternRepeat: 'repeat'.
@@ -38,6 +44,6 @@ export function getWallHatchPattern(): HTMLImageElement {
     ctx.stroke();
   }
 
-  cachedPattern = canvas;
+  cachedPatterns.set(key, canvas);
   return canvas as unknown as HTMLImageElement;
 }

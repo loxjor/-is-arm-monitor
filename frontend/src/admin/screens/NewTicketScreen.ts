@@ -1,3 +1,4 @@
+import { SpecRow, SpecTile } from '../../design/components';
 import { ApiError, api } from '../api/client';
 import type { EquipmentListItem, Page, TicketCard, TicketPriority, TicketType } from '../api/types';
 import { statusBadge } from '../labels';
@@ -27,14 +28,14 @@ export class NewTicketScreen implements Screen {
   private type: TicketType = 'repair';
   private priority: TicketPriority = 'normal';
   private equipmentId: number | null;
-  private readonly typeRow = h('div', { class: 'choice-row', role: 'radiogroup', 'aria-label': 'Что нужно сделать' });
-  private readonly priorityRow = h('div', { class: 'choice-row', role: 'radiogroup', 'aria-label': 'Срочность' });
+  private readonly typeRow = h('div', { class: 'chip-row', role: 'group', 'aria-label': 'Что нужно сделать' });
+  private readonly priorityRow = h('div', { class: 'chip-row', role: 'group', 'aria-label': 'Срочность' });
   private readonly equipmentGrid = h('div', { class: 'equipment-cards' }, h('p', { class: 'muted' }, 'Загрузка…'));
   private readonly equipmentHint = h('p', { class: 'muted small' });
   private readonly description = h('textarea', { 'aria-label': 'Описание', maxlength: 4000,
     placeholder: 'Опишите, что случилось: когда началось, что на экране, что уже пробовали' });
   private readonly error = h('div', { class: 'form-error', role: 'alert' });
-  private readonly submit = h('button', { type: 'button', class: 'btn btn--primary' }, 'Отправить заявку');
+  private readonly submit = h('button', { type: 'button', class: 'arm-btn' }, 'Отправить заявку');
   private equipment: EquipmentListItem[] = [];
 
   constructor(context: RouteContext) {
@@ -53,7 +54,7 @@ export class NewTicketScreen implements Screen {
       h('section', { class: 'card step' }, h('h2', null, '3. Насколько срочно?'), this.priorityRow),
       h('section', { class: 'card step' }, h('h2', null, '4. Опишите проблему'), this.description),
       this.error,
-      h('div', { class: 'actions' }, h('a', { class: 'btn btn--plain', href: '#/tickets' }, 'Отмена'), this.submit),
+      h('div', { class: 'actions' }, h('a', { class: 'arm-btn arm-btn-light', href: '#/tickets' }, 'Отмена'), this.submit),
     );
     this.renderChoices();
     void this.loadEquipment();
@@ -62,8 +63,7 @@ export class NewTicketScreen implements Screen {
   private renderChoices(): void {
     this.typeRow.replaceChildren(...TYPES.map((t) => {
       const button = h('button', {
-        type: 'button', class: `choice${t.value === this.type ? ' selected' : ''}`, role: 'radio',
-        'aria-checked': String(t.value === this.type), title: t.hint,
+        type: 'button', class: 'arm-chip', 'aria-pressed': String(t.value === this.type), title: t.hint,
         onclick: () => {
           this.type = t.value;
           this.renderChoices();
@@ -73,8 +73,7 @@ export class NewTicketScreen implements Screen {
       return button;
     }));
     this.priorityRow.replaceChildren(...PRIORITIES.map((p) => h('button', {
-      type: 'button', class: `choice${p.value === this.priority ? ' selected' : ''}`, role: 'radio',
-      'aria-checked': String(p.value === this.priority),
+      type: 'button', class: 'arm-chip', 'aria-pressed': String(p.value === this.priority),
       onclick: () => {
         this.priority = p.value;
         this.renderChoices();
@@ -115,9 +114,9 @@ export class NewTicketScreen implements Screen {
 
     const tiles = this.equipment.map((item) => tile(item.equipment_id, [
       h('strong', null, item.type_name),
-      h('span', null, `${item.manufacturer_name} ${item.model_name}`),
-      h('span', { class: 'muted small' }, `Инв. № ${item.inventory_no}${item.workplace_no ? ` · РМ ${item.workplace_no}` : ''}`),
-      h('span', null, statusBadge(item.status)),
+      h('span', { class: 'muted' }, `${item.manufacturer_name} ${item.model_name}`),
+      SpecRow([SpecTile(item.inventory_no, 'Инв. номер'), ...(item.workplace_no ? [SpecTile(item.workplace_no, 'Рабочее место')] : [])]),
+      statusBadge(item.status),
     ]));
     if (!required) tiles.unshift(tile(null, [h('strong', null, 'Без оборудования'), h('span', { class: 'muted small' }, 'Новая техника, рабочее место')]));
     if (tiles.length === 0) {

@@ -29,9 +29,9 @@ export class DashboardScreen implements Screen {
       h('h2', null, 'Заявки'),
       ticketTiles,
       h('div', { class: 'quick-links' },
-        h('a', { class: 'btn btn--plain', href: '#/equipment' }, 'Реестр оборудования'),
-        h('a', { class: 'btn btn--plain', href: '#/equipment?expiring=12' }, 'Истекает срок службы (12 мес.)'),
-        can('manage_equipment') ? h('a', { class: 'btn btn--primary', href: '#/equipment?new=1' }, 'Поставить на учёт') : null,
+        h('a', { class: 'arm-btn arm-btn-light', href: '#/equipment' }, 'Реестр оборудования'),
+        h('a', { class: 'arm-btn arm-btn-light', href: '#/equipment?expiring=12' }, 'Истекает срок службы (12 мес.)'),
+        can('manage_equipment') ? h('a', { class: 'arm-btn', href: '#/equipment?new=1' }, 'Поставить на учёт') : null,
       ),
     );
 

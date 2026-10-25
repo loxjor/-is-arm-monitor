@@ -1,3 +1,4 @@
+import { SpecRow, SpecTile } from '../../design/components';
 import { api } from '../api/client';
 import type { AssignmentRecord, EquipmentCard, Page, TicketListItem } from '../api/types';
 import { can } from '../auth';
@@ -33,7 +34,7 @@ export class EquipmentCardScreen implements Screen {
 
   private render(card: EquipmentCard): void {
     this.title = card.inventory_no;
-    document.title = `${card.inventory_no} — АРМ-Монитор`;
+    document.title = `${card.inventory_no} — АРМ Монитор`;
     const editable = can('manage_equipment') && card.status !== 'written_off';
     const onAssigned = (message: string) => (saved: EquipmentCard) => {
       toast(message);
@@ -41,7 +42,7 @@ export class EquipmentCardScreen implements Screen {
     };
     const action = (label: string, operation: 'assign' | 'move' | 'return', message: string, primary = false) =>
       h('button', {
-        type: 'button', class: `btn ${primary ? 'btn--primary' : 'btn--plain'}`,
+        type: 'button', class: `arm-btn${primary ? '' : ' arm-btn-light'}`,
         onclick: () => openAssignmentForm(card, operation, onAssigned(message)),
       }, label);
     const operations = can('assign_equipment')
@@ -76,6 +77,15 @@ export class EquipmentCardScreen implements Screen {
       { onRowClick: (t) => (location.hash = `#/tickets/${t.ticket_id}`), emptyText: 'Заявок не было' },
     );
 
+    // Ряд плиток — только заполненные характеристики: у монитора их нет вовсе.
+    const specs = [
+      card.cpu ? SpecTile(card.cpu, 'Процессор') : null,
+      card.ram_gb !== null ? SpecTile(`${card.ram_gb} ГБ`, 'ОЗУ') : null,
+      card.storage_gb !== null ? SpecTile(`${card.storage_gb} ГБ`, 'Накопитель') : null,
+      card.os_name ? SpecTile(card.os_name, 'ОС') : null,
+      card.hostname ? SpecTile(card.hostname, 'Сетевое имя', card.ip_address ?? undefined) : null,
+    ].filter((tile): tile is HTMLDivElement => tile !== null);
+
     this.content.replaceChildren(
       h('div', { class: 'page-head' },
         h('div', null,
@@ -85,11 +95,11 @@ export class EquipmentCardScreen implements Screen {
         h('div', { class: 'actions' },
           operations,
           can('create_tickets') && card.status !== 'written_off'
-            ? h('a', { class: 'btn btn--plain', href: `#/tickets/new?equipment=${card.equipment_id}` }, 'Подать заявку')
+            ? h('a', { class: 'arm-btn arm-btn-light', href: `#/tickets/new?equipment=${card.equipment_id}` }, 'Подать заявку')
             : null,
           editable
             ? h('button', {
-                type: 'button', class: 'btn btn--plain',
+                type: 'button', class: 'arm-btn arm-btn-light',
                 onclick: () => openEquipmentForm(card, (saved) => {
                   toast('Карточка сохранена');
                   this.render(saved);
@@ -98,6 +108,7 @@ export class EquipmentCardScreen implements Screen {
             : null,
         ),
       ),
+      ...(specs.length ? [SpecRow(specs)] : []),
       h('div', { class: 'cards' },
         h('section', { class: 'card' }, h('h2', null, 'Учётные сведения'), facts([
           ['Инвентарный номер', card.inventory_no],
@@ -112,14 +123,7 @@ export class EquipmentCardScreen implements Screen {
           ['Помещение', card.room_no ? `каб. ${card.room_no}` : '—'],
           ['Рабочее место', dash(card.workplace_no)],
           ['Выдано', dash(card.holder_name)],
-          ['Сетевое имя', dash(card.hostname)],
           ['IP-адрес', dash(card.ip_address)],
-        ])),
-        h('section', { class: 'card' }, h('h2', null, 'Характеристики'), facts([
-          ['Процессор', dash(card.cpu)],
-          ['ОЗУ', card.ram_gb === null ? '—' : `${card.ram_gb} ГБ`],
-          ['Накопитель', card.storage_gb === null ? '—' : `${card.storage_gb} ГБ`],
-          ['Операционная система', dash(card.os_name)],
         ])),
       ),
       h('section', { class: 'card' }, h('h2', null, 'История назначений и перемещений'), history.element),

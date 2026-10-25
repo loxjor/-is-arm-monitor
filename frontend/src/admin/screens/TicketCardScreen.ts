@@ -111,12 +111,12 @@ export class TicketCardScreen implements Screen {
 
   private render(card: TicketCard): void {
     this.title = `Заявка № ${card.ticket_id}`;
-    document.title = `${this.title} — АРМ-Монитор`;
+    document.title = `${this.title} — АРМ Монитор`;
 
     const buttons = card.can_transition_to.map((to) => {
       const action = actionFor(card, to);
       return h('button', {
-        type: 'button', class: `btn ${action.primary ? 'btn--primary' : 'btn--plain'}`,
+        type: 'button', class: `arm-btn${action.primary ? '' : ' arm-btn-light'}`,
         onclick: () => this.submit(card, 'transitions', action.fields?.(card) ?? [], action.label, action.success, { to }),
       }, action.label);
     });
@@ -165,7 +165,7 @@ export class TicketCardScreen implements Screen {
           h('h2', null, 'Журнал работ'),
           card.can_add_work
             ? h('button', {
-                type: 'button', class: 'btn btn--plain btn--small',
+                type: 'button', class: 'arm-btn arm-btn-light',
                 onclick: () => this.submit(card, 'works', workFields, 'Запись в журнал работ', 'Запись добавлена'),
               }, '+ Добавить запись')
             : null,
