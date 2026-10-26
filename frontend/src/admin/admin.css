@@ -722,3 +722,112 @@ h2 {
     width: 100%;
   }
 }
+
+/* ---- «Моё имущество»: вкладки по роли и панель фильтров ---- */
+
+.role-total {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--space-4);
+}
+
+.tab {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"] {
+  border-color: var(--line);
+  border-bottom-color: var(--ground);
+  background: var(--ground);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.tab-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+  color: var(--on-ink);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.tab[aria-selected="true"] .tab-count {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.filters--panel {
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.filters--panel .field {
+  flex: 1 1 180px;
+}
+
+.filters--panel .search {
+  width: 100%;
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--ground);
+  font-size: 11px;
+  line-height: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tag--accent {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.inv-no {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-family: ui-monospace, Consolas, monospace;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+}

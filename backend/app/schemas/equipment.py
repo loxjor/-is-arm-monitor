@@ -49,6 +49,7 @@ class EquipmentListItem(BaseModel):
     workplace_no: str | None
     room_id: int | None
     room_no: str | None
+    building_address: str | None
     mol_id: int | None
     mol_name: str | None
     holder_id: int | None = Field(description="Сотрудник, которому выдано (последнее назначение)")

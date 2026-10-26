@@ -69,6 +69,7 @@ export interface EquipmentListItem {
   workplace_no: string | null;
   room_id: number | null;
   room_no: string | null;
+  building_address: string | null;
   mol_id: number | null;
   mol_name: string | null;
   holder_id: number | null;

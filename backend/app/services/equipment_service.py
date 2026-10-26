@@ -101,6 +101,7 @@ def _loaded() -> Select[tuple[Equipment]]:
         joinedload(Equipment.model).joinedload(EquipmentModel.manufacturer),
         joinedload(Equipment.operating_system),
         joinedload(Equipment.workplace).joinedload(Workplace.room).joinedload(Room.department),
+        joinedload(Equipment.workplace).joinedload(Workplace.room).joinedload(Room.building),
         joinedload(Equipment.mol),
     )
 
@@ -186,6 +187,7 @@ def _to_item(equipment: Equipment, holder: Employee | None) -> EquipmentListItem
         workplace_no=workplace.workplace_no if workplace else None,
         room_id=workplace.room_id if workplace else None,
         room_no=workplace.room.room_no if workplace else None,
+        building_address=workplace.room.building.address if workplace else None,
         mol_id=equipment.mol_id,
         mol_name=equipment.mol.full_name if equipment.mol else None,
         holder_id=holder.employee_id if holder else None,

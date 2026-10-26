@@ -16,6 +16,7 @@ import { EquipmentCardScreen } from './screens/EquipmentCardScreen';
 import { EquipmentListScreen } from './screens/EquipmentListScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { MapScreen } from './screens/MapScreen';
+import { MyEquipmentScreen } from './screens/MyEquipmentScreen';
 import { NewTicketScreen } from './screens/NewTicketScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { TicketCardScreen } from './screens/TicketCardScreen';
@@ -43,6 +44,7 @@ const ROUTES: Route[] = [
   { pattern: /^\/$/, create: () => new ProfileScreen() },
   { pattern: /^\/profile$/, create: () => new ProfileScreen() },
   { pattern: /^\/summary$/, create: () => new DashboardScreen() },
+  { pattern: /^\/my-equipment$/, create: (context) => new MyEquipmentScreen(context) },
   { pattern: /^\/equipment$/, create: (context) => new EquipmentListScreen(context) },
   { pattern: /^\/equipment\/(\d+)$/, create: (context) => new EquipmentCardScreen(context) },
   { pattern: /^\/tickets$/, create: (context) => new TicketListScreen(context) },
@@ -69,6 +71,7 @@ function navGroups(): TreeNavGroup[] {
       title: 'Кабинет',
       items: [
         { href: '#/profile', label: 'Мой профиль' },
+        { href: '#/my-equipment', label: 'Моё имущество' },
         ...(personal ? [] : [{ href: '#/summary', label: 'Сводка' }]),
         { href: '#/tickets/new', label: 'Новая заявка', permission: 'create_tickets' },
       ],
@@ -78,7 +81,8 @@ function navGroups(): TreeNavGroup[] {
     {
       title: 'Учёт',
       items: [
-        { href: '#/equipment', label: personal ? 'Моя техника' : 'Реестр оборудования' },
+        // Сотруднику реестр не нужен: всё его — в «Моём имуществе».
+        ...(personal ? [] : [{ href: '#/equipment', label: 'Реестр оборудования' }]),
         { href: '#/tickets', label: personal ? 'Мои заявки' : 'Заявки' },
         { href: '/index.html', label: 'Редактор плана', permission: 'edit_floor_plans' },
         // Справочники — одним пунктом; рабочий инструмент тех, кто видит весь парк,

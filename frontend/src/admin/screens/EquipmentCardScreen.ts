@@ -1,7 +1,7 @@
 import { SpecRow, SpecTile } from '../../design/components';
 import { api } from '../api/client';
 import type { AssignmentRecord, EquipmentCard, Page, TicketListItem } from '../api/types';
-import { can } from '../auth';
+import { can, currentUser } from '../auth';
 import { OPERATION_LABELS, TICKET_TYPE_LABELS, statusBadge, ticketBadge } from '../labels';
 import { DataTable } from '../ui/DataTable';
 import { dash, formatDate, formatMoney, h, type Child } from '../ui/dom';
@@ -20,7 +20,11 @@ export class EquipmentCardScreen implements Screen {
   private readonly content = h('div', null, h('p', { class: 'muted' }, 'Загрузка…'));
 
   constructor(context: RouteContext) {
-    this.element = h('div', null, h('a', { href: '#/equipment', class: 'back' }, '← Реестр оборудования'), this.content);
+    // Сотруднику реестр не показывается — назад он возвращается к своему имуществу.
+    const back = currentUser().scope === 'own'
+      ? h('a', { href: '#/my-equipment', class: 'back' }, '← Моё имущество')
+      : h('a', { href: '#/equipment', class: 'back' }, '← Реестр оборудования');
+    this.element = h('div', null, back, this.content);
     void this.load(Number(context.params[0]));
   }
 
