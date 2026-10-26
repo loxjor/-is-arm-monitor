@@ -1,0 +1,12 @@
+[Unit]
+Description=АРМ Монитор — API
+After=network.target postgresql.service
+
+[Service]
+User=deploy
+WorkingDirectory=/opt/arm-monitor/backend
+ExecStart=/opt/arm-monitor/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
