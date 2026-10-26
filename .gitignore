@@ -12,3 +12,10 @@ backend/*.db
 # editors / os
 .vscode/
 .DS_Store
+
+# не часть программы: заметки, планы, анализ, служебные файлы Claude
+.claude/
+docs/
+CLAUDE.md
+PLAN_ARM.md
+TASKS.md
