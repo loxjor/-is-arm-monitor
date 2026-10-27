@@ -39,11 +39,9 @@ CORS_ORIGINS=["https://<домен>"]
 
 Демо-данные (только при первом запуске): `cd /opt/arm-monitor/backend && ../.venv/bin/python -m app.seed`.
 
-## Секреты GitHub (Settings → Secrets and variables → Actions)
+## Агент GitHub Actions на сервере
 
-| Секрет | Значение |
-|---|---|
-| `DEPLOY_HOST` | адрес сервера |
-| `DEPLOY_USER` | `deploy` |
-| `DEPLOY_SSH_KEY` | приватный ключ (`ssh-keygen -t ed25519`), публичный — в `~deploy/.ssh/authorized_keys` |
-| `DEPLOY_KNOWN_HOSTS` | вывод `ssh-keyscan <адрес сервера>` |
+Выкладку выполняет self-hosted runner под пользователем `deploy` с меткой
+`arm-monitor`: репозиторий → Settings → Actions → Runners → New self-hosted runner
+(Linux x64), команды оттуда выполнить под `deploy`, при `./config.sh` добавить
+`--labels arm-monitor`, затем `sudo ./svc.sh install deploy && sudo ./svc.sh start`.

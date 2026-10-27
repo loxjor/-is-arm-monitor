@@ -42,7 +42,8 @@ jobs:
   deploy:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
+    # Агент GitHub Actions на самом сервере: входящий SSH из интернета не нужен.
+    runs-on: [self-hosted, arm-monitor]
     concurrency: deploy
     steps:
       - uses: actions/checkout@v4
@@ -50,22 +51,10 @@ jobs:
         with:
           name: frontend-dist
           path: frontend/dist
-      - name: Upload to server
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - name: Deploy
         run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_deploy && chmod 600 ~/.ssh/id_deploy
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          SSH="ssh -i ~/.ssh/id_deploy"
-          T="$DEPLOY_USER@$DEPLOY_HOST"
           # .env и venv живут только на сервере — rsync их не трогает
-          rsync -az --delete -e "$SSH" \
-            --exclude '.env' --exclude '.venv' --exclude '__pycache__' --exclude '*.db' \
-            backend/ "$T:/opt/arm-monitor/backend/"
-          rsync -az --delete -e "$SSH" frontend/dist/ "$T:/opt/arm-monitor/www/"
-          rsync -az -e "$SSH" deploy/deploy.sh "$T:/opt/arm-monitor/deploy.sh"
-          $SSH "$T" 'bash /opt/arm-monitor/deploy.sh'
+          rsync -a --delete             --exclude '.env' --exclude '.venv' --exclude '__pycache__' --exclude '*.db'             backend/ /opt/arm-monitor/backend/
+          rsync -a --delete frontend/dist/ /opt/arm-monitor/www/
+          install -m 755 deploy/deploy.sh /opt/arm-monitor/deploy.sh
+          bash /opt/arm-monitor/deploy.sh
