@@ -26,6 +26,52 @@ def test_register_sets_in_stock_and_rejects_duplicate(client: TestClient) -> Non
     assert duplicate.status_code == 409
 
 
+def _type_id(client: TestClient, headers: dict[str, str], name: str) -> int:
+    types = client.get("/api/v1/equipment-types", headers=headers).json()["items"]
+    return next(t["type_id"] for t in types if t["name"] == name)
+
+
+def test_register_by_type_manufacturer_model_keeps_only_type_specs(client: TestClient) -> None:
+    headers = login(client, "sysadmin")
+    payload = {
+        "inventory_no": "ВТ-777010",
+        "type_id": _type_id(client, headers, "МФУ"),
+        "manufacturer_name": "  Kyocera ",
+        "model_name": "ECOSYS M2040dn",
+        "is_color": False,
+        "cartridge_type": "TK-1170",
+        "drum_type": "DK-1150",
+        "scan_modes": "duplex_feeder,flatbed",
+        "diagonal_inch": "23.8",  # чужая характеристика (монитор) — отбрасывается
+        "ram_gb": 8,  # и системного блока — тоже
+    }
+    response = client.post("/api/v1/equipment", json=payload, headers=headers)
+    assert response.status_code == 201, response.text
+    card = response.json()
+    assert (card["type_name"], card["manufacturer_name"], card["model_name"]) == ("МФУ", "Kyocera", "ECOSYS M2040dn")
+    assert card["is_color"] is False and card["cartridge_type"] == "TK-1170" and card["drum_type"] == "DK-1150"
+    assert card["scan_modes"] == "flatbed,duplex_feeder"
+    assert card["diagonal_inch"] is None and card["ram_gb"] is None
+
+    # Повторная постановка с тем же текстом использует тот же производитель и модель.
+    again = client.post("/api/v1/equipment", json={**payload, "inventory_no": "ВТ-777011"}, headers=headers).json()
+    assert again["model_id"] == card["model_id"]
+
+
+def test_register_requires_model_or_type_manufacturer_model(client: TestClient) -> None:
+    headers = login(client, "sysadmin")
+    response = client.post("/api/v1/equipment", json={"inventory_no": "ВТ-777012"}, headers=headers)
+    assert response.status_code == 422
+    bad_mode = {"inventory_no": "ВТ-777013", "model_id": 1, "scan_modes": "laser"}
+    assert client.post("/api/v1/equipment", json=bad_mode, headers=headers).status_code == 422
+
+
+def test_five_equipment_types_available(client: TestClient) -> None:
+    headers = login(client, "sysadmin")
+    names = {t["name"] for t in client.get("/api/v1/equipment-types", headers=headers).json()["items"]}
+    assert {"Системный блок", "Монитор", "Принтер", "Сканер", "МФУ"} <= names
+
+
 def test_status_is_not_writable_through_update(client: TestClient) -> None:
     headers = login(client, "sysadmin")
     card = _new_equipment(client, headers, "ВТ-777002")

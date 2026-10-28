@@ -1,9 +1,12 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.enums import AssignmentOperation, EquipmentStatus
+
+SCAN_MODE_ORDER = ("flatbed", "feeder", "duplex_feeder")  # со стекла, потоковая, потоковая двусторонняя
+SCAN_MODES = set(SCAN_MODE_ORDER)
 
 # model_id — имя поля из Т-модели; без этого Pydantic ругается на префикс model_.
 _CONFIG = ConfigDict(from_attributes=True, protected_namespaces=())
@@ -25,9 +28,45 @@ class EquipmentWrite(BaseModel):
     commissioned_on: date | None = Field(default=None, description="Дата ввода в эксплуатацию")
     book_value: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2,
                                        description="Балансовая стоимость, руб.")
-    model_id: int
+    diagonal_inch: Decimal | None = Field(default=None, gt=0, max_digits=4, decimal_places=1,
+                                          description="Диагональ монитора, дюймы")
+    resolution: str | None = Field(default=None, max_length=20, description="Разрешение, напр. 1920×1080")
+    connection_type: str | None = Field(default=None, max_length=50, description="Подключение монитора")
+    is_color: bool | None = Field(default=None, description="Цветная печать (принтер, МФУ)")
+    cartridge_type: str | None = Field(default=None, max_length=100, description="Тип картриджей")
+    drum_type: str | None = Field(default=None, max_length=100, description="Тип барабанов")
+    scan_modes: str | None = Field(default=None, max_length=50,
+                                   description="Режимы сканирования через запятую: flatbed, feeder, duplex_feeder")
+    # Модель — либо из справочника (model_id), либо по тексту: тип + производитель + модель.
+    # Нового производителя и модель сервис заводит в справочниках сам.
+    model_id: int | None = None
+    type_id: int | None = None
+    manufacturer_name: str | None = Field(default=None, max_length=50)
+    model_name: str | None = Field(default=None, max_length=150)
     os_id: int | None = None
     mol_id: int | None = Field(default=None, description="Материально ответственное лицо")
+
+    @field_validator("manufacturer_name", "model_name")
+    @classmethod
+    def _strip(cls, value: str | None) -> str | None:
+        return value.strip() or None if value else None
+
+    @field_validator("scan_modes")
+    @classmethod
+    def _check_scan_modes(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        modes = [m.strip() for m in value.split(",") if m.strip()]
+        unknown = set(modes) - SCAN_MODES
+        if unknown:
+            raise ValueError(f"Неизвестный режим сканирования: {', '.join(sorted(unknown))}")
+        return ",".join(m for m in SCAN_MODE_ORDER if m in modes) or None
+
+    @model_validator(mode="after")
+    def _check_model(self) -> "EquipmentWrite":
+        if self.model_id is None and not (self.type_id and self.manufacturer_name and self.model_name):
+            raise ValueError("Укажите тип оборудования, производителя и модель")
+        return self
 
 
 class EquipmentListItem(BaseModel):
@@ -92,5 +131,12 @@ class EquipmentCard(EquipmentListItem):
     ram_gb: int | None
     storage_gb: int | None
     ip_address: str | None
+    diagonal_inch: float | None
+    resolution: str | None
+    connection_type: str | None
+    is_color: bool | None
+    cartridge_type: str | None
+    drum_type: str | None
+    scan_modes: str | None
     dept_name: str | None = Field(description="Подразделение помещения, где установлено")
     assignments: list[AssignmentRead]

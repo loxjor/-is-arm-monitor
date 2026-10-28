@@ -22,6 +22,8 @@ from app.models import (
     Equipment,
     EquipmentModel,
     EquipmentStatus,
+    EquipmentType,
+    Manufacturer,
     OperatingSystem,
     Room,
     Workplace,
@@ -253,6 +255,13 @@ def get_card(db: Session, user: AppUser, equipment_id: int) -> EquipmentCard:
         ram_gb=equipment.ram_gb,
         storage_gb=equipment.storage_gb,
         ip_address=equipment.ip_address,
+        diagonal_inch=float(equipment.diagonal_inch) if equipment.diagonal_inch is not None else None,
+        resolution=equipment.resolution,
+        connection_type=equipment.connection_type,
+        is_color=equipment.is_color,
+        cartridge_type=equipment.cartridge_type,
+        drum_type=equipment.drum_type,
+        scan_modes=equipment.scan_modes,
         dept_name=workplace.room.department.name if workplace and workplace.room.department else None,
         assignments=[
             AssignmentRead(
@@ -269,8 +278,10 @@ def get_card(db: Session, user: AppUser, equipment_id: int) -> EquipmentCard:
 
 
 def _check_references(db: Session, data: EquipmentWrite) -> None:
-    if db.get(EquipmentModel, data.model_id) is None:
+    if data.model_id is not None and db.get(EquipmentModel, data.model_id) is None:
         raise NotFoundError("Модель оборудования не найдена")
+    if data.model_id is None and db.get(EquipmentType, data.type_id) is None:
+        raise NotFoundError("Тип оборудования не найден")
     if data.os_id is not None and db.get(OperatingSystem, data.os_id) is None:
         raise NotFoundError("Операционная система не найдена")
     if data.mol_id is not None:
@@ -289,16 +300,72 @@ def _check_inventory_no_unique(db: Session, inventory_no: str, exclude_id: int |
         raise ConflictError(f"Инвентарный номер {inventory_no} уже есть в реестре")
 
 
+# Характеристики по группам оборудования. МФУ входит и в печать, и в сканирование.
+_PC_SPECS = {"cpu", "ram_gb", "storage_gb"}
+_MONITOR_SPECS = {"diagonal_inch", "resolution", "connection_type"}
+_PRINT_SPECS = {"is_color", "cartridge_type", "drum_type"}
+_SCAN_SPECS = {"scan_modes"}
+_TYPE_SPECS = {
+    "системный блок": _PC_SPECS,
+    "монитор": _MONITOR_SPECS,
+    "принтер": _PRINT_SPECS,
+    "сканер": _SCAN_SPECS,
+    "мфу": _PRINT_SPECS | _SCAN_SPECS,
+}
+_ALL_SPECS = _PC_SPECS | _MONITOR_SPECS | _PRINT_SPECS | _SCAN_SPECS
+
+
+def _find_by_name(rows, name: str):
+    # lower() в SQLite не знает кириллицу, поэтому сравнение — в Python (справочники небольшие).
+    wanted = name.casefold()
+    return next((row for row in rows if row.name.casefold() == wanted), None)
+
+
+def _resolve_model(db: Session, data: EquipmentWrite) -> EquipmentModel:
+    """Модель по коду или по тексту «тип + производитель + модель» (новые заводятся в справочниках)."""
+    if data.model_id is not None:
+        return db.get(EquipmentModel, data.model_id)
+    manufacturer = _find_by_name(db.scalars(select(Manufacturer)), data.manufacturer_name)
+    if manufacturer is None:
+        manufacturer = Manufacturer(name=data.manufacturer_name)
+        db.add(manufacturer)
+        db.flush()
+    candidates = db.scalars(
+        select(EquipmentModel).where(
+            EquipmentModel.type_id == data.type_id, EquipmentModel.manufacturer_id == manufacturer.manufacturer_id
+        )
+    )
+    model = _find_by_name(candidates, data.model_name)
+    if model is None:
+        model = EquipmentModel(name=data.model_name, type_id=data.type_id, manufacturer_id=manufacturer.manufacturer_id)
+        db.add(model)
+        db.flush()
+    return model
+
+
+def _values(db: Session, data: EquipmentWrite) -> dict:
+    """Поля записи оборудования: модель определена, характеристики чужих типов отброшены."""
+    model = _resolve_model(db, data)
+    db.refresh(model)
+    values = data.model_dump(exclude={"type_id", "manufacturer_name", "model_name"})
+    values["model_id"] = model.model_id
+    allowed = _TYPE_SPECS.get(model.equipment_type.name.casefold(), _PC_SPECS)
+    for name in _ALL_SPECS - allowed:
+        values[name] = None
+    return values
+
+
 def register(db: Session, user: AppUser, data: EquipmentWrite) -> EquipmentCard:
     """Постановка на учёт (BPMN 2.5): статус всегда «На складе»."""
     _check_references(db, data)
     _check_inventory_no_unique(db, data.inventory_no)
-    equipment = Equipment(**data.model_dump(), status=EquipmentStatus.in_stock)
+    values = _values(db, data)
+    equipment = Equipment(**values, status=EquipmentStatus.in_stock)
     db.add(equipment)
     db.flush()
     audit_service.record(
         db, user_id=user.user_id, action="create", entity="equipment", entity_id=equipment.equipment_id,
-        details=data.model_dump(),
+        details=values,
     )
     db.commit()
     return get_card(db, user, equipment.equipment_id)
@@ -311,7 +378,7 @@ def update(db: Session, user: AppUser, equipment_id: int, data: EquipmentWrite) 
     _check_references(db, data)
     _check_inventory_no_unique(db, data.inventory_no, exclude_id=equipment_id)
 
-    values = data.model_dump()
+    values = _values(db, data)
     changes = {
         name: {"from": getattr(equipment, name), "to": value}
         for name, value in values.items()

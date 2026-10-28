@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, SmallInteger, String
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, SmallInteger, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -23,6 +23,14 @@ class Equipment(Base):
     cpu: Mapped[str | None] = mapped_column(String(50))
     ram_gb: Mapped[int | None] = mapped_column(SmallInteger)
     storage_gb: Mapped[int | None] = mapped_column(SmallInteger)
+    # Характеристики по типу: монитор, принтер/МФУ, сканер/МФУ.
+    diagonal_inch: Mapped[Decimal | None] = mapped_column(Numeric(4, 1))
+    resolution: Mapped[str | None] = mapped_column(String(20))
+    connection_type: Mapped[str | None] = mapped_column(String(50))
+    is_color: Mapped[bool | None] = mapped_column(Boolean)
+    cartridge_type: Mapped[str | None] = mapped_column(String(100))
+    drum_type: Mapped[str | None] = mapped_column(String(100))
+    scan_modes: Mapped[str | None] = mapped_column(String(50))  # коды через запятую
     hostname: Mapped[str | None] = mapped_column(String(50))
     ip_address: Mapped[str | None] = mapped_column(String(20))
     commissioned_on: Mapped[date | None] = mapped_column(Date)

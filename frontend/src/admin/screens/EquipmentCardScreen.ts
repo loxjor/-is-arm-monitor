@@ -8,6 +8,12 @@ import { dash, formatDate, formatMoney, h, type Child } from '../ui/dom';
 import { errorMessage, toast } from '../ui/toast';
 import { openAssignmentForm } from './assignmentForm';
 import { openEquipmentForm } from './equipmentForm';
+
+const SCAN_MODE_LABELS: Record<string, string> = {
+  flatbed: 'со стекла',
+  feeder: 'потоковая',
+  duplex_feeder: 'потоковая двусторонняя',
+};
 import type { RouteContext, Screen } from './Screen';
 
 function facts(rows: [string, Child][]): HTMLElement {
@@ -86,6 +92,15 @@ export class EquipmentCardScreen implements Screen {
       card.cpu ? SpecTile(card.cpu, 'Процессор') : null,
       card.ram_gb !== null ? SpecTile(`${card.ram_gb} ГБ`, 'ОЗУ') : null,
       card.storage_gb !== null ? SpecTile(`${card.storage_gb} ГБ`, 'Накопитель') : null,
+      card.diagonal_inch !== null ? SpecTile(`${card.diagonal_inch}″`, 'Диагональ') : null,
+      card.resolution ? SpecTile(card.resolution, 'Разрешение') : null,
+      card.connection_type ? SpecTile(card.connection_type, 'Подключение') : null,
+      card.is_color !== null ? SpecTile(card.is_color ? 'Цветная' : 'Чёрно-белая', 'Печать') : null,
+      card.cartridge_type ? SpecTile(card.cartridge_type, 'Картриджи') : null,
+      card.drum_type ? SpecTile(card.drum_type, 'Барабаны') : null,
+      card.scan_modes
+        ? SpecTile(card.scan_modes.split(',').map((m) => SCAN_MODE_LABELS[m] ?? m).join(', '), 'Сканирование')
+        : null,
       card.os_name ? SpecTile(card.os_name, 'ОС') : null,
       card.hostname ? SpecTile(card.hostname, 'Сетевое имя', card.ip_address ?? undefined) : null,
     ].filter((tile): tile is HTMLDivElement => tile !== null);

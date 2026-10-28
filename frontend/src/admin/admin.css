@@ -229,6 +229,20 @@ h2 {
   grid-column: 1 / -1;
 }
 
+.field[hidden] {
+  display: none;
+}
+
+.field--wide {
+  grid-column: 1 / -1;
+}
+
+.check-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
 .field-label {
   font-size: 11px;
   line-height: 15px;

@@ -93,6 +93,13 @@ export interface EquipmentCard extends EquipmentListItem {
   ram_gb: number | null;
   storage_gb: number | null;
   ip_address: string | null;
+  diagonal_inch: number | null;
+  resolution: string | null;
+  connection_type: string | null;
+  is_color: boolean | null;
+  cartridge_type: string | null;
+  drum_type: string | null;
+  scan_modes: string | null;
   dept_name: string | null;
   assignments: AssignmentRecord[];
 }

@@ -314,6 +314,10 @@ def seed_reference_data(db: Session) -> None:
     monitor = EquipmentType(name="Монитор", service_life_months=84)
     printer = EquipmentType(name="МФУ", service_life_months=60)
     db.add_all([pc, monitor, printer])
+    db.add_all([
+        EquipmentType(name="Принтер", service_life_months=60),
+        EquipmentType(name="Сканер", service_life_months=60),
+    ])
 
     aquarius = Manufacturer(name="Аквариус", country="Россия")
     iru = Manufacturer(name="iRU", country="Россия")
