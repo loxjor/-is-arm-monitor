@@ -4,6 +4,8 @@ import os
 os.environ["JWT_SECRET"] = "test-secret-not-for-production-0123456789"
 os.environ["SEED_PASSWORD"] = "demo-password-1"
 os.environ["DATABASE_URL"] = "sqlite://"
+# Минимум bcrypt (4 раунда) — только для скорости тестов; в продукте по умолчанию 12.
+os.environ["BCRYPT_ROUNDS"] = "4"
 
 from collections.abc import Generator  # noqa: E402
 

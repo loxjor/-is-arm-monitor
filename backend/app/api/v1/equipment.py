@@ -69,8 +69,9 @@ def register(data: EquipmentWrite, db: Session = Depends(get_db), user: AppUser 
 
 @router.put("/{equipment_id}", response_model=EquipmentCard)
 def update(equipment_id: int, data: EquipmentWrite, db: Session = Depends(get_db), user: AppUser = Depends(_editor)):
+    # Только проверка видимости (404 для чужого): карточка соберётся в update.
     try:
-        equipment_service.get_card(db, user, equipment_id)
+        equipment_service.get_visible(db, user, equipment_id)
     except NotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
     try:
@@ -90,7 +91,7 @@ def assign(
 ):
     """Назначение со склада, перемещение или возврат на склад; ответ — обновлённая карточка."""
     try:
-        equipment_service.get_card(db, user, equipment_id)
+        equipment_service.get_visible(db, user, equipment_id)
     except NotFoundError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
     try:

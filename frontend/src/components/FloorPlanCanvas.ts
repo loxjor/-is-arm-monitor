@@ -14,7 +14,14 @@ import {
   type NodeRay,
 } from '../utils/wallPolygon';
 import { generateId } from '../utils/id';
-import { polygonsOverlap, rectCorners, shrinkRect, type Point as DeskPoint } from '../utils/deskCollision';
+import {
+  boundsMayOverlap,
+  boundsOf,
+  polygonsOverlap,
+  rectCorners,
+  shrinkRect,
+  type Point as DeskPoint,
+} from '../utils/deskCollision';
 import { PIXELS_PER_CM, cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 import { onThemeChange, palette, withAlpha } from '../theme';
@@ -27,8 +34,15 @@ import {
   intersectRaySegment,
   rayStartRelation,
 } from '../utils/geometry';
-import { alignmentLines, snapToAlignment, type AlignResult } from '../utils/wallAlign';
-import { findRooms, polygonCentroid } from '../utils/rooms';
+import { alignmentLines, snapToAlignment, type AlignLine, type AlignResult } from '../utils/wallAlign';
+import { findRooms, polygonCentroid, type Room } from '../utils/rooms';
+import { changeGate, lastValueMemo, wallGraphKey } from '../utils/memo';
+import {
+  findAbutmentFace,
+  prepareAbutmentWalls,
+  type AbutmentWallInput,
+  type PreparedAbutmentWall,
+} from '../utils/wallAbutment';
 import { pointAtDistance, shiftAxisForOneSidedThickness, type WallSide } from '../utils/wallEdit';
 import {
   faceForwardGeometry,
@@ -198,9 +212,26 @@ export class FloorPlanCanvas {
   private deskSelection: DeskSelection;
   private wallControls: WallControls;
   private onSelectionChange: ((wall: SelectedWallInfo | null) => void) | null = null;
+  /**
+   * Пропуск повторных уведомлений тулбара: emitSelectionChange зовётся из
+   * каждого rebuildWallGeometry (в том числе на каждый mousemove при
+   * перетаскивании), а панель настроек нужно перерисовывать, только когда
+   * поменялось то, что она показывает.
+   */
+  private readonly selectionChangeGate = changeGate();
   // Перетаскивание ручки конца выделенной стены: какой узел тянем и к какому
   // чужому узлу он сейчас примагничен (тогда при отпускании узлы сливаются).
-  private handleDrag: { nodeId: string; mergeTargetNodeId: string | null } | null = null;
+  /**
+   * Перетаскивание ручки конца. adjacentNodeIds/sharingWallIds считаются один
+   * раз в начале жеста: пока ручку тянут, двигаются только координаты узла,
+   * связи графа не меняются (слияние узлов — уже при отпускании).
+   */
+  private handleDrag: {
+    nodeId: string;
+    mergeTargetNodeId: string | null;
+    adjacentNodeIds: ReadonlySet<string>;
+    sharingWallIds: ReadonlySet<string>;
+  } | null = null;
 
   private workspaces = new Map<string, Workspace>();
   private nodes = new Map<string, WallNode>();
@@ -236,12 +267,26 @@ export class FloorPlanCanvas {
     null;
   private readonly handlePanMove = (event: MouseEvent): void => this.handleMiddleButtonPanMove(event);
   private readonly handlePanEnd = (event: MouseEvent): void => this.handleMiddleButtonPanEnd(event);
+  /**
+   * Зум двумя пальцами: расстояние между пальцами, масштаб и точка сцены
+   * под серединой между ними в момент касания вторым пальцем. Пока жест
+   * идёт, остальные обработчики касаний (рисование, призрак стола) молчат.
+   */
+  private pinch: {
+    distance: number;
+    scale: number;
+    pointTo: { x: number; y: number };
+    /** draggable сцены до жеста: на время жеста перетаскивание выключено, иначе первый палец двигал бы сцену поверх зума. */
+    wasDraggable: boolean;
+  } | null = null;
 
   private wallDrawStart: { x: number; y: number } | null = null;
   private wallDrawStartSnap: WallSnap | null = null;
   // Старт от грани чужой стены: грань и выбранный режим протяжки — вперёд
   // свободным углом или параллельно грани, прижавшись к ней (см. nextDrawMode).
   private wallDrawFace: FaceHug | null = null;
+  /** Линии-ориентиры текущей протяжки (см. alignWallEnd); null — вне протяжки или ещё не построены. */
+  private wallDrawAlignLines: AlignLine[] | null = null;
   private wallDrawMode: DrawMode = 'none';
   // Старт от торца: сектор допустимых углов ±135° от продолжения стены и
   // красный сектор запрета позади торца (см. WallStartHit.endSector).
@@ -258,6 +303,11 @@ export class FloorPlanCanvas {
   // Пунктир выравнивания от концов/узлов других стен и заливка замкнутых помещений.
   private alignGuideNodes: (Konva.Line | Konva.Circle)[] = [];
   private roomGroup = new Konva.Group({ listening: false });
+  private readonly roomsMemo = lastValueMemo<Room[]>();
+  /** Помещения, по которым построены текущие узлы roomGroup (null — пересоздать). */
+  private renderedRooms: Room[] | null = null;
+  private roomLabels: { label: Konva.Text; centroid: WallEndpoint }[] = [];
+  private readonly continuableFreeEndsMemo = lastValueMemo<ReadonlySet<string>>();
   // Мировые углы линий-направляющих текущей протяжки: четыре мировые оси
   // для свободного старта, нормаль и ±45° — для старта от грани.
   private guideAnglesDeg: number[] = GUIDE_LINE_ANGLES_DEG;
@@ -317,11 +367,18 @@ export class FloorPlanCanvas {
       }
     });
 
+    // Раньше остальных обработчиков касаний: второй палец должен успеть
+    // прервать начатую первым пальцем протяжку, пока она не продолжилась.
+    // hitOnDragEnabled — чтобы touchmove доходил и во время перетаскивания сцены.
+    Konva.hitOnDragEnabled = true;
+    this.stage.on('touchstart touchmove', (event) => this.handlePinch(event.evt));
+    window.addEventListener('touchend', this.handlePinchEnd);
+    window.addEventListener('touchcancel', this.handlePinchEnd);
     this.stage.on('mousedown touchstart', (event) => this.handleWallDrawStart(event));
     this.stage.on('mousemove touchmove', (event) => this.handleWallDrawMove(event));
     this.stage.on('wheel', (event) => this.handleWheelZoom(event));
     this.stage.on('mousemove touchmove', () => {
-      if (this.mode !== 'place-desk') return;
+      if (this.mode !== 'place-desk' || this.pinch) return;
       const pointer = this.stage.getRelativePointerPosition();
       if (pointer) this.updateDeskGhost(pointer);
     });
@@ -434,11 +491,70 @@ export class FloorPlanCanvas {
     this.applyZoomVisuals(newScale);
   }
 
+  /**
+   * Зум двумя пальцами с сохранением точки сцены под серединой между ними —
+   * как колесо держит точку под курсором. Середина при этом может ехать:
+   * сцена следует за пальцами, так что жест сразу и масштабирует, и двигает.
+   */
+  private handlePinch(event: TouchEvent): void {
+    if (event.touches.length < 2) {
+      return;
+    }
+    event.preventDefault();
+    const rect = this.stage.container().getBoundingClientRect();
+    const [a, b] = [event.touches[0], event.touches[1]];
+    const center = { x: (a.clientX + b.clientX) / 2 - rect.left, y: (a.clientY + b.clientY) / 2 - rect.top };
+    const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+    if (!this.pinch) {
+      if (distance === 0) {
+        return;
+      }
+      // Первый палец мог успеть начать протяжку стены или перетаскивание
+      // сцены — жест двумя пальцами их отменяет, а не завершает.
+      const wasDraggable = this.stage.draggable();
+      if (this.stage.isDragging()) {
+        this.stage.stopDrag();
+      }
+      this.stage.draggable(false);
+      if (this.wallDrawStart) {
+        this.clearWallDrawingVisuals();
+      }
+      this.hideDeskGhost();
+      const scale = this.stage.scaleX();
+      this.pinch = {
+        distance,
+        scale,
+        pointTo: { x: (center.x - this.stage.x()) / scale, y: (center.y - this.stage.y()) / scale },
+        wasDraggable,
+      };
+      this.structureLayer.batchDraw();
+      return;
+    }
+
+    const newScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, this.pinch.scale * (distance / this.pinch.distance)));
+    this.stage.scale({ x: newScale, y: newScale });
+    this.stage.position({
+      x: center.x - this.pinch.pointTo.x * newScale,
+      y: center.y - this.pinch.pointTo.y * newScale,
+    });
+    this.stage.batchDraw();
+    this.applyZoomVisuals(newScale);
+  }
+
+  // Жест кончается, когда на экране остаётся меньше двух пальцев.
+  private readonly handlePinchEnd = (event: TouchEvent): void => {
+    if (this.pinch && event.touches.length < 2) {
+      this.stage.draggable(this.pinch.wasDraggable);
+      this.pinch = null;
+    }
+  };
+
   /** Видимость мелкой сетки и колбэк масштаба — общий хвост zoom-логики (колесо/сброс вида). */
   private applyZoomVisuals(scale: number): void {
     this.gridMinorRect?.visible(scale > GRID_MINOR_VISIBLE_ABOVE_SCALE);
     this.gridLayer.batchDraw();
-    this.renderWallOverlays();
+    this.renderScaleDependentOverlays();
     this.deskSelection.setScale(scale);
     this.onScaleChange?.(scale);
   }
@@ -527,26 +643,32 @@ export class FloorPlanCanvas {
     this.gridLayer.add(this.gridMinorRect);
 
     const majorSpacing = GRID_MINOR_SPACING_PX * GRID_MAJOR_EVERY;
+    const segments: [number, number, number, number][] = [];
     for (let x = origin; x <= extent; x += majorSpacing) {
-      this.gridLayer.add(
-        new Konva.Line({
-          points: [x, origin, x, extent],
-          stroke: palette().line,
-          strokeWidth: 1,
-          listening: false,
-        }),
-      );
+      segments.push([x, origin, x, extent]);
     }
     for (let y = origin; y <= extent; y += majorSpacing) {
-      this.gridLayer.add(
-        new Konva.Line({
-          points: [origin, y, extent, y],
-          stroke: palette().line,
-          strokeWidth: 1,
-          listening: false,
-        }),
-      );
+      segments.push([origin, y, extent, y]);
     }
+    // Одна фигура вместо ~200 Konva.Line: слой перерисовывается на каждый тик
+    // зума, и обход сотен узлов дороже самих штрихов. Каждая линия — отдельный
+    // путь со своим stroke, ровно как рисовал Konva.Line: цвет линии
+    // полупрозрачный, и на пересечениях наложение должно остаться прежним.
+    this.gridLayer.add(
+      new Konva.Shape({
+        stroke: palette().line,
+        strokeWidth: 1,
+        listening: false,
+        sceneFunc: (context, shape) => {
+          for (const [x1, y1, x2, y2] of segments) {
+            context.beginPath();
+            context.moveTo(x1, y1);
+            context.lineTo(x2, y2);
+            context.strokeShape(shape);
+          }
+        },
+      }),
+    );
 
     this.gridLayer.batchDraw();
   }
@@ -712,11 +834,16 @@ export class FloorPlanCanvas {
    */
   private deskCollides(cornersPx: readonly DeskPoint[], excludeWorkspaceId?: string): boolean {
     const desk = shrinkRect(cornersPx, 1);
+    // Сначала дешёвая проверка охватывающих прямоугольников: точная
+    // polygonsOverlap нужна лишь соседям — а зовётся это на каждый шаг протяжки стола.
+    const deskBounds = boundsOf(desk);
+    const overlaps = (polygon: readonly DeskPoint[]): boolean =>
+      boundsMayOverlap(deskBounds, boundsOf(polygon)) && polygonsOverlap(desk, polygon);
     for (const wall of this.walls.values()) {
-      if (polygonsOverlap(desk, wall.getPolygon())) return true;
+      if (overlaps(wall.getPolygon())) return true;
     }
     for (const [id, workspace] of this.workspaces) {
-      if (id !== excludeWorkspaceId && polygonsOverlap(desk, workspace.cornersPx())) return true;
+      if (id !== excludeWorkspaceId && overlaps(workspace.cornersPx())) return true;
     }
     return false;
   }
@@ -763,6 +890,8 @@ export class FloorPlanCanvas {
   destroy(): void {
     window.removeEventListener('mouseup', this.handleWindowPointerUp);
     window.removeEventListener('touchend', this.handleWindowPointerUp);
+    window.removeEventListener('touchend', this.handlePinchEnd);
+    window.removeEventListener('touchcancel', this.handlePinchEnd);
     window.removeEventListener('mousemove', this.handlePanMove);
     window.removeEventListener('mouseup', this.handlePanEnd);
     this.resizeObserver.disconnect();
@@ -915,6 +1044,9 @@ export class FloorPlanCanvas {
    * стен это O(рёбра), без ощутимой задержки на каждое действие.
    */
   private rebuildWallGeometry(): void {
+    // Граф мог измениться (в том числе undo посреди протяжки) — ориентиры
+    // текущей протяжки построятся заново при следующем alignWallEnd.
+    this.wallDrawAlignLines = null;
     const raysByNode = new Map<string, NodeRay[]>();
     const pushRay = (nodeId: string, ray: NodeRay): void => {
       const existing = raysByNode.get(nodeId);
@@ -948,13 +1080,19 @@ export class FloorPlanCanvas {
     });
 
     const faceByRayKey = new Map<string, { left: WallEndpoint; right: WallEndpoint }>();
+    // Готовится лениво: без свободных концов (замкнутый контур) не нужна вовсе.
+    let abutmentWalls: PreparedAbutmentWall[] | null = null;
     raysByNode.forEach((rays, nodeId) => {
       const node = this.nodes.get(nodeId);
       if (!node) {
         return;
       }
       const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
-      const abutment = rays.length === 1 ? this.findAbutmentFacePx(nodeId, nodePx) : undefined;
+      let abutment: FaceLine | undefined;
+      if (rays.length === 1) {
+        abutmentWalls ??= this.prepareAbutmentWalls();
+        abutment = this.findAbutmentFacePx(nodeId, nodePx, abutmentWalls);
+      }
       computeNodeFaceVertices(nodePx, rays, abutment).forEach((face, key) => faceByRayKey.set(key, face));
     });
 
@@ -980,31 +1118,31 @@ export class FloorPlanCanvas {
    * к грани при рисовании, см. WallSnap 'face'), — по её линии обрезается
    * торец (см. computeNodeFaceVertices).
    */
-  private findAbutmentFacePx(nodeId: string, nodePx: WallEndpoint): FaceLine | undefined {
-    for (const wall of this.walls.values()) {
-      if (wall.startNodeId === nodeId || wall.endNodeId === nodeId) {
-        continue;
-      }
-      const { startPx, endPx, thicknessPx, lengthPx } = this.segmentGeometryPx(wall);
-      if (lengthPx === 0) {
-        continue;
-      }
-      const dir = { x: (endPx.x - startPx.x) / lengthPx, y: (endPx.y - startPx.y) / lengthPx };
-      const relX = nodePx.x - startPx.x;
-      const relY = nodePx.y - startPx.y;
-      const t = relX * dir.x + relY * dir.y;
-      const d = -relX * dir.y + relY * dir.x;
-      const half = thicknessPx / 2;
-      if (t < 0 || t > lengthPx || Math.abs(Math.abs(d) - half) > RAY_START_EPSILON_PX) {
-        continue;
-      }
-      const sign = Math.sign(d);
-      return {
-        point: { x: startPx.x - dir.y * half * sign, y: startPx.y + dir.x * half * sign },
-        dir,
-      };
-    }
-    return undefined;
+  private findAbutmentFacePx(
+    nodeId: string,
+    nodePx: WallEndpoint,
+    prepared: readonly PreparedAbutmentWall[],
+  ): FaceLine | undefined {
+    return findAbutmentFace(nodeId, nodePx, prepared, RAY_START_EPSILON_PX);
+  }
+
+  /**
+   * Геометрия всех стен для findAbutmentFacePx — один раз на проход по узлам,
+   * а не заново для каждого свободного конца (rebuildWallGeometry зовётся на
+   * каждый mousemove при перетаскивании ручки).
+   */
+  private prepareAbutmentWalls(): PreparedAbutmentWall[] {
+    const inputs: AbutmentWallInput[] = [];
+    this.walls.forEach((wall) => {
+      inputs.push({
+        startNodeId: wall.startNodeId,
+        endNodeId: wall.endNodeId,
+        startPx: this.nodePointPx(wall.startNodeId),
+        endPx: this.nodePointPx(wall.endNodeId),
+        thicknessPx: cmToPx(wall.thicknessCm),
+      });
+    });
+    return prepareAbutmentWalls(inputs, RAY_START_EPSILON_PX);
   }
 
   /**
@@ -1023,17 +1161,29 @@ export class FloorPlanCanvas {
     this.deskSelection.update();
     this.deskGhost?.destroy();
     this.deskGhost = null;
+    // Заливка и шрифт подписей помещений — из токенов темы: пересоздать, даже
+    // если сами помещения не изменились.
+    this.renderedRooms = null;
     this.renderWallOverlays();
     this.stage.batchDraw();
   }
 
   private renderWallOverlays(): void {
+    this.renderScaleDependentOverlays();
+    this.emitSelectionChange();
+  }
+
+  /**
+   * Та часть renderWallOverlays, что зависит от масштаба. Зум зовёт только её:
+   * длина и толщина выделенной стены от масштаба не меняются, и сообщать
+   * тулбару о «новом» выделении на каждый тик колеса незачем.
+   */
+  private renderScaleDependentOverlays(): void {
     const scale = this.stage.scaleX();
     this.walls.forEach((wall) => wall.renderDimensions(scale));
     this.renderRooms(scale);
     this.dimensionLayer.batchDraw();
     this.updateWallControls();
-    this.emitSelectionChange();
   }
 
   private get selectedWall(): Wall | undefined {
@@ -1054,17 +1204,31 @@ export class FloorPlanCanvas {
   /** Подписка тулбара на выделение стены: null — выделена не стена или ничего. Вызывается сразу с текущим состоянием. */
   setOnSelectionChange(callback: (wall: SelectedWallInfo | null) => void): void {
     this.onSelectionChange = callback;
+    // Новый подписчик получает текущее состояние, даже если оно уже отправлялось прежнему.
+    this.selectionChangeGate.reset();
     this.emitSelectionChange();
   }
 
+  /**
+   * Сообщает тулбару выделение, только если изменилось отправляемое значение
+   * или то, что панель настроек читает у холста сама (режим, id выделения —
+   * стол тоже, толщина новой стены): повтор с теми же данными перерисовал бы
+   * панель теми же значениями.
+   */
   private emitSelectionChange(): void {
-    const wall = this.selectedWall;
-    if (!wall) {
-      this.onSelectionChange?.(null);
+    if (!this.onSelectionChange) {
       return;
     }
-    const { lengthPx } = this.segmentGeometryPx(wall);
-    this.onSelectionChange?.({ lengthCm: pxToCm(lengthPx), thicknessCm: wall.thicknessCm });
+    const wall = this.selectedWall;
+    const info: SelectedWallInfo | null = wall
+      ? { lengthCm: pxToCm(this.segmentGeometryPx(wall).lengthPx), thicknessCm: wall.thicknessCm }
+      : null;
+    const key = `${this.mode}|${this.selectedId ?? ''}|${this.wallThicknessCm}|${
+      info ? `${info.lengthCm}:${info.thicknessCm}` : '-'
+    }`;
+    if (this.selectionChangeGate(key)) {
+      this.onSelectionChange(info);
+    }
   }
 
   /** Сколько стен сходится в каждом узле. */
@@ -1151,7 +1315,23 @@ export class FloorPlanCanvas {
       return;
     }
     this.pushUndoSnapshot();
-    this.handleDrag = { nodeId, mergeTargetNodeId: null };
+    this.handleDrag = { nodeId, mergeTargetNodeId: null, ...this.handleDragLinks(nodeId) };
+  }
+
+  /**
+   * Узлы, уже соединённые с этим одной стеной, в слияние не берём — иначе
+   * стена между ними схлопнулась бы в точку. Стены, делящие узел, едут
+   * вместе с ним — для привязок и столкновений они не в счёт.
+   */
+  private handleDragLinks(nodeId: string): { adjacentNodeIds: Set<string>; sharingWallIds: Set<string> } {
+    const adjacentNodeIds = new Set<string>([nodeId]);
+    const sharingWallIds = new Set<string>();
+    this.walls.forEach((other) => {
+      if (other.startNodeId === nodeId) adjacentNodeIds.add(other.endNodeId);
+      if (other.endNodeId === nodeId) adjacentNodeIds.add(other.startNodeId);
+      if (other.startNodeId === nodeId || other.endNodeId === nodeId) sharingWallIds.add(other.id);
+    });
+    return { adjacentNodeIds, sharingWallIds };
   }
 
   /**
@@ -1168,13 +1348,7 @@ export class FloorPlanCanvas {
       return pos;
     }
 
-    // Узлы, уже соединённые с этим одной стеной, в слияние не берём — иначе
-    // стена между ними схлопнулась бы в точку.
-    const adjacent = new Set<string>([drag.nodeId]);
-    this.walls.forEach((other) => {
-      if (other.startNodeId === drag.nodeId) adjacent.add(other.endNodeId);
-      if (other.endNodeId === drag.nodeId) adjacent.add(other.startNodeId);
-    });
+    const adjacent = drag.adjacentNodeIds;
 
     let target = pos;
     let guideSnapped = false;
@@ -1207,7 +1381,13 @@ export class FloorPlanCanvas {
     }
 
     if (!mergeTargetNodeId) {
-      target = this.constrainHandleTarget(drag.nodeId, end === 'start' ? wall.endNodeId : wall.startNodeId, pos, target, guideSnapped);
+      target = this.constrainHandleTarget(
+        drag.sharingWallIds,
+        end === 'start' ? wall.endNodeId : wall.startNodeId,
+        pos,
+        target,
+        guideSnapped,
+      );
     }
 
     drag.mergeTargetNodeId = mergeTargetNodeId;
@@ -1224,18 +1404,12 @@ export class FloorPlanCanvas {
    * двигаемый узел, не в счёт: они едут вместе с ним.
    */
   private constrainHandleTarget(
-    nodeId: string,
+    exclude: ReadonlySet<string>,
     anchorNodeId: string,
     pos: WallEndpoint,
     target: WallEndpoint,
     guideSnapped: boolean,
   ): WallEndpoint {
-    const exclude = new Set<string>();
-    this.walls.forEach((w) => {
-      if (w.startNodeId === nodeId || w.endNodeId === nodeId) {
-        exclude.add(w.id);
-      }
-    });
     let result = target;
     if (!guideSnapped) {
       const snap = this.findWallSnapPx(pos, exclude);
@@ -1601,6 +1775,38 @@ export class FloorPlanCanvas {
     return best;
   }
 
+  /**
+   * Свободные концы (степень 1), не приставленные к чужой грани, — от них
+   * можно продолжить стену. Поиск примыкания перебирает все стены для
+   * каждого конца (O(узлы·стены)), а findWallStartSnapPx зовётся на каждый
+   * mousemove, пока граф не меняется, — поэтому результат кэшируется по
+   * отпечатку графа (координаты узлов, концы и толщины рёбер).
+   */
+  private continuableFreeEnds(): ReadonlySet<string> {
+    const key = wallGraphKey(this.nodes.values(), this.wallKeyEdges());
+    return this.continuableFreeEndsMemo(key, () => {
+      const degrees = this.nodeDegrees();
+      const result = new Set<string>();
+      let abutmentWalls: PreparedAbutmentWall[] | null = null;
+      for (const [nodeId, node] of this.nodes) {
+        if (degrees.get(nodeId) !== 1) {
+          continue;
+        }
+        abutmentWalls ??= this.prepareAbutmentWalls();
+        if (!this.findAbutmentFacePx(nodeId, { x: cmToPx(node.x), y: cmToPx(node.y) }, abutmentWalls)) {
+          result.add(nodeId);
+        }
+      }
+      return result;
+    });
+  }
+
+  private *wallKeyEdges(): Generator<{ startNodeId: string; endNodeId: string; thickness: number }> {
+    for (const wall of this.walls.values()) {
+      yield { startNodeId: wall.startNodeId, endNodeId: wall.endNodeId, thickness: wall.thicknessCm };
+    }
+  }
+
   /** Стены как тела для привязки старта к граням — ось, полутолщина и готовый полигон. */
   private wallBodies(): WallBody[] {
     const bodies: WallBody[] = [];
@@ -1633,16 +1839,16 @@ export class FloorPlanCanvas {
   private findWallStartSnapPx(pos: WallEndpoint): WallStartHit {
     let corner: WallSnap | null = null;
     let bestDist = this.snapRadiusPx;
-    const degrees = this.nodeDegrees();
+    const continuable = this.continuableFreeEnds();
     for (const [nodeId, node] of this.nodes) {
-      const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
       // Продолжить можно только свободный конец: в узле, где уже сходятся
       // несколько стен, или в основании стены, приставленной к чужой грани,
       // призрак по центру узла сидел бы наполовину в теле стены — там
       // стена стартует от грани (findFaceHug).
-      if (degrees.get(nodeId) !== 1 || this.findAbutmentFacePx(nodeId, nodePx)) {
+      if (!continuable.has(nodeId)) {
         continue;
       }
+      const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
       const dist = Math.hypot(pos.x - nodePx.x, pos.y - nodePx.y);
       if (dist <= bestDist) {
         bestDist = dist;
@@ -2131,6 +2337,10 @@ export class FloorPlanCanvas {
     data.workspaces.forEach((workspaceData) => this.addWorkspace(workspaceData));
 
     this.isRestoring = false;
+    // Undo посреди перетаскивания ручки заменил граф — связи узла пересчитать.
+    if (this.handleDrag) {
+      Object.assign(this.handleDrag, this.handleDragLinks(this.handleDrag.nodeId));
+    }
     this.rebuildWallGeometry();
     this.mainLayer.batchDraw();
   }
@@ -2174,7 +2384,7 @@ export class FloorPlanCanvas {
     // mousedown прилетает и от средней/правой; средняя занята панорамой,
     // так что рисование должно реагировать только на левую (touch — не
     // MouseEvent, его не трогаем).
-    if (this.mode !== 'draw-wall') {
+    if (this.mode !== 'draw-wall' || this.pinch) {
       return;
     }
     if (event.evt instanceof MouseEvent && event.evt.button !== 0) {
@@ -2206,6 +2416,7 @@ export class FloorPlanCanvas {
     const scale = this.stage.scaleX();
 
     this.wallDrawStart = pos;
+    this.wallDrawAlignLines = null;
 
     this.guideHighlight = new Konva.Circle({
       x: pos.x,
@@ -2320,7 +2531,7 @@ export class FloorPlanCanvas {
   private handleWallDrawMove(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
     // См. комментарий в handleWallDrawStart — с зумом/панорамированием
     // getPointerPosition() больше не координата сцены.
-    const pos = this.stage.getRelativePointerPosition();
+    const pos = this.pinch ? null : this.stage.getRelativePointerPosition();
     if (!pos) {
       return;
     }
@@ -2461,6 +2672,7 @@ export class FloorPlanCanvas {
     this.updateWallSnapIndicator(null);
     this.wallDrawAxis = { lengthPx: 0, angleDeg: 0 };
     this.wallDrawStart = null;
+    this.wallDrawAlignLines = null;
     this.wallDrawStartSnap = null;
     this.wallDrawEndSnap = null;
     this.wallDrawFace = null;
@@ -2508,9 +2720,18 @@ export class FloorPlanCanvas {
     angleDeg: number,
     angleSnapped: boolean,
   ): AlignResult | undefined {
-    const nodes = [...this.nodes.values()].map((n) => ({ id: n.id, x: cmToPx(n.x), y: cmToPx(n.y) }));
-    const edges = [...this.walls.values()].map((w) => ({ startNodeId: w.startNodeId, endNodeId: w.endNodeId }));
-    const lines = alignmentLines(nodes, edges).filter(
+    // Ориентиры зависят только от уже нарисованных стен, а пока тянется новая,
+    // граф не меняется — строим их один раз за протяжку, а не на каждый mousemove.
+    let allLines = this.wallDrawStart ? this.wallDrawAlignLines : null;
+    if (!allLines) {
+      const nodes = [...this.nodes.values()].map((n) => ({ id: n.id, x: cmToPx(n.x), y: cmToPx(n.y) }));
+      const edges = [...this.walls.values()].map((w) => ({ startNodeId: w.startNodeId, endNodeId: w.endNodeId }));
+      allLines = alignmentLines(nodes, edges);
+      if (this.wallDrawStart) {
+        this.wallDrawAlignLines = allLines;
+      }
+    }
+    const lines = allLines.filter(
       (line) => Math.hypot(line.origin.x - start.x, line.origin.y - start.y) > RAY_START_EPSILON_PX,
     );
     const rad = (angleDeg * Math.PI) / 180;
@@ -2561,14 +2782,25 @@ export class FloorPlanCanvas {
 
   /** Заливка и площадь замкнутых помещений (под стенами, по внутренним граням). */
   private renderRooms(scale: number): void {
-    this.roomGroup.destroyChildren();
     const nodes = [...this.nodes.values()].map((n) => ({ id: n.id, x: cmToPx(n.x), y: cmToPx(n.y) }));
     const edges = [...this.walls.values()].map((w) => ({
       startNodeId: w.startNodeId,
       endNodeId: w.endNodeId,
       thickness: cmToPx(w.thicknessCm),
     }));
-    for (const room of findRooms(nodes, edges)) {
+    // findRooms попарно перебирает узлы и рёбра — при неизменном графе (зум,
+    // смена выделения) берём прошлый результат и только масштабируем подписи.
+    const rooms = this.roomsMemo(wallGraphKey(nodes, edges), () => findRooms(nodes, edges));
+    if (rooms === this.renderedRooms) {
+      this.roomLabels.forEach(({ label, centroid }) => this.placeRoomLabel(label, centroid, scale));
+      this.backgroundLayer.batchDraw();
+      return;
+    }
+
+    this.roomGroup.destroyChildren();
+    this.roomLabels = [];
+    this.renderedRooms = rooms;
+    for (const room of rooms) {
       this.roomGroup.add(
         new Konva.Line({
           points: room.polygon.flatMap((p) => [p.x, p.y]),
@@ -2580,16 +2812,22 @@ export class FloorPlanCanvas {
       const areaM2 = room.area / (PIXELS_PER_CM * PIXELS_PER_CM) / 10000;
       const label = new Konva.Text({
         text: `${areaM2.toFixed(2)} м²`,
-        fontSize: 14 / scale,
         fill: palette()['ink-muted'],
         fontFamily: palette().fontSans,
         listening: false,
       });
-      const c = polygonCentroid(room.polygon);
-      label.position({ x: c.x - label.width() / 2, y: c.y - label.height() / 2 });
+      const centroid = polygonCentroid(room.polygon);
+      this.placeRoomLabel(label, centroid, scale);
       this.roomGroup.add(label);
+      this.roomLabels.push({ label, centroid });
     }
     this.backgroundLayer.batchDraw();
+  }
+
+  /** Подпись площади — постоянного экранного размера, по центру помещения. */
+  private placeRoomLabel(label: Konva.Text, centroid: WallEndpoint, scale: number): void {
+    label.fontSize(14 / scale);
+    label.position({ x: centroid.x - label.width() / 2, y: centroid.y - label.height() / 2 });
   }
 
   /**

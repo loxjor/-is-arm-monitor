@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     JWT_EXPIRE_MINUTES: int = 480
     SEED_PASSWORD: str | None = None
+    # Стоимость bcrypt. Понижать только в тестах (conftest) — там каждый вход
+    # хеширует/проверяет пароль, и 12 раундов занимают основную часть прогона.
+    BCRYPT_ROUNDS: int = 12
     # Тело одного PUT/POST — весь план целиком; несколько мегабайт — с
     # большим запасом для тысяч стен и мест, но не безлимит.
     MAX_REQUEST_BODY_BYTES: int = 5_000_000

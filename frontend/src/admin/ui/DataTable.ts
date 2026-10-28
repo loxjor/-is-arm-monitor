@@ -43,7 +43,8 @@ export class DataTable<T> {
     this.body.replaceChildren(
       ...rows.map((row) => {
         const tr = h('tr', { class: onRowClick ? 'clickable' : null },
-          this.columns.map((column) => h('td', { class: column.className }, column.render(row))),
+          // data-label — подпись значения, когда на телефоне строка становится карточкой (admin.css).
+          this.columns.map((column) => h('td', { class: column.className, 'data-label': column.title }, column.render(row))),
         );
         if (onRowClick) {
           tr.tabIndex = 0;

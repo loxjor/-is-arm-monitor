@@ -11,6 +11,9 @@ body.editor-mode {
     overflow: hidden;
     background: var(--ground);
     z-index: 0;
+    /* Жесты на холсте — его собственные (сдвиг, зум двумя пальцами):
+       браузер не должен ни прокручивать, ни масштабировать страницу. */
+    touch-action: none;
 }
 
 .top-bar,
@@ -332,17 +335,61 @@ body.editor-mode {
 
 /* ─── Узкий экран и печать ──────────────────────────────────── */
 
+/* Телефон: каждая панель — одна строка с горизонтальной прокруткой. Переносы
+   складывали панели в пять-шесть рядов, и под них уходила треть экрана —
+   а с кнопками под палец (44px, styles/base.css) ушла бы половина. */
 @media (max-width: 720px) {
+    .top-bar,
+    .left-toolbar,
+    .bottom-panel,
+    .top-bar .chip-row,
+    .bottom-panel .chip-row {
+        flex-wrap: nowrap;
+    }
+
+    .top-bar,
+    .left-toolbar,
+    .bottom-panel {
+        left: var(--space-2);
+        right: var(--space-2);
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+
+    .top-bar > *,
+    .left-toolbar > *,
+    .bottom-panel > *,
+    .chip-row > * {
+        flex: none;
+    }
+
+    .top-bar {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .top-bar .plan-title {
+        max-width: 40vw;
+    }
+
     .left-toolbar {
         top: auto;
-        bottom: 132px;
+        bottom: 76px;
         flex-direction: row;
-        flex-wrap: wrap;
-        right: var(--space-2);
+        padding: var(--space-2);
+    }
+
+    .bottom-panel {
+        transform: none;
+        width: auto;
+        max-width: none;
+        justify-content: flex-start;
+        gap: var(--space-4);
+        padding: var(--space-2) var(--space-3);
     }
 
     .tool-settings {
-        top: 120px;
+        top: 76px;
         left: var(--space-2);
     }
 
