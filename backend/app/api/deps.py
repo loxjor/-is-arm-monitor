@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.permissions import Permission, RoleCode, has_permission
 from app.core.security import InvalidTokenError, decode_access_token
@@ -36,7 +36,9 @@ def get_current_user(
         user_id = decode_access_token(credentials.credentials)
     except InvalidTokenError:
         raise _unauthorized()
-    user = db.get(AppUser, user_id)
+    # Роль и сотрудник нужны почти каждому маршруту (require, области видимости) —
+    # грузим одним запросом, а не ленивыми догрузками.
+    user = db.get(AppUser, user_id, options=[joinedload(AppUser.role), joinedload(AppUser.employee)])
     # Блокировка действует сразу, не дожидаясь истечения токена.
     if user is None or not user.is_active:
         raise _unauthorized()

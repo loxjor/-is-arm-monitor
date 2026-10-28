@@ -167,6 +167,25 @@ h2 {
   padding-bottom: 10px;
 }
 
+/* Под палец — как остальные кнопки (styles/base.css); свой отступ выше это перебил бы.
+   Подпись чекбокса и «← назад» — тоже цели: тянем до --touch-target, не меняя вида. */
+@media (pointer: coarse) {
+  .btn-wide {
+    padding-top: calc((var(--touch-target) - 14px) / 2);
+    padding-bottom: calc((var(--touch-target) - 14px) / 2);
+  }
+
+  .check {
+    min-height: var(--touch-target);
+  }
+
+  /* У ссылки строка тела текста — 22px. */
+  .back {
+    padding: calc((var(--touch-target) - 22px) / 2) 0;
+    margin-bottom: 0;
+  }
+}
+
 /* ---- Поля и фильтры ---- */
 
 .filters {
@@ -547,6 +566,8 @@ h2 {
   border-radius: var(--radius-md);
   box-shadow: inset 0 0 0 1px var(--line);
   overflow: hidden;
+  /* Сдвиг и зум двумя пальцами — у карты; страницу листают за её пределами. */
+  touch-action: none;
 }
 
 /* ---- Модальное окно ---- */
@@ -556,7 +577,11 @@ h2 {
   inset: 0;
   background: color-mix(in srgb, var(--ground-deep) 85%, transparent);
   display: grid;
-  place-items: center;
+  /* Колонка — по ширине экрана, а не по содержимому: select с длинными
+     названиями моделей иначе раздвигал окно за край телефона. */
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  align-items: center;
   padding: var(--space-4);
   z-index: 10;
 }
@@ -703,6 +728,88 @@ h2 {
     display: none;
   }
 
+  /* Ромб знака на телефоне не читается как кнопка, а подсказка-title на
+     сенсорном экране не всплывает — рядом со знаком подпись-таблетка. */
+  /* Размеры — как у .arm-chip из components.css: 11/14, отступы 5px 10px. */
+  button.arm-tree-brand::after {
+    content: "Меню";
+    line-height: 14px;
+    padding: 5px 10px;
+    border-radius: var(--radius-pill);
+    background: var(--surface);
+    color: var(--ink);
+  }
+
+  button.arm-tree-brand[aria-expanded="true"]::after {
+    content: "Свернуть";
+  }
+}
+
+/* ---- Телефон: строки таблиц — карточками ---- */
+
+@media (max-width: 600px) {
+  /* Таблица — карточками: подпись колонки (data-label из DataTable) слева,
+     значение справа. Иначе широкая таблица видна лишь по трети за раз. */
+  .table thead {
+    display: none;
+  }
+
+  .table,
+  .table tbody,
+  .table tr {
+    display: block;
+    width: 100%;
+  }
+
+  .table tr {
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table td {
+    display: grid;
+    grid-template-columns: minmax(96px, 38%) minmax(0, 1fr);
+    /* Подпись (caption 11/15) и значение (тело 14/22) — на одной базовой линии. */
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: var(--space-1) var(--space-3);
+    border-bottom: 0;
+  }
+
+  /* Как заголовок колонки .table th — caption, ink-muted. */
+  .table td::before {
+    content: attr(data-label);
+    font-size: 11px;
+    line-height: 15px;
+    color: var(--ink-muted);
+  }
+
+  /* Колонка без заголовка (действия) и строка «Нет записей» — без подписи. */
+  .table td[data-label=""],
+  .table td.table-empty {
+    display: block;
+  }
+
+  .table td[data-label=""]::before,
+  .table td.table-empty::before {
+    content: none;
+  }
+
+  .table td.details,
+  .clip {
+    max-width: none;
+  }
+
+  .clip {
+    white-space: normal;
+  }
+}
+
+@media (max-width: 860px) {
   .topbar,
   .content {
     padding-left: var(--space-4);
@@ -715,10 +822,125 @@ h2 {
   }
 
   .form {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .search {
     width: 100%;
   }
+}
+
+/* ---- «Моё имущество»: вкладки по роли и панель фильтров ---- */
+
+.role-total {
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--space-4);
+}
+
+.tab {
+  font: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: none;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--ink);
+}
+
+.tab[aria-selected="true"] {
+  border-color: var(--line);
+  border-bottom-color: var(--ground);
+  background: var(--ground);
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.tab-count {
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--line-strong);
+  color: var(--on-ink);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.tab[aria-selected="true"] .tab-count {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.filters--panel {
+  align-items: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.filters--panel .field {
+  flex: 1 1 180px;
+}
+
+.filters--panel .search {
+  width: 100%;
+}
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--ground);
+  font-size: 11px;
+  line-height: 15px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tag--accent {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.inv-no {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: var(--radius-xs);
+  background: var(--ink);
+  color: var(--on-ink);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* Номера — шрифтом системы (Golos Text), но с цифрами одной ширины, чтобы
+   в столбце они вставали ровно, как в моноширинном. */
+.inv-no,
+.mono {
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-size: 11px;
+  line-height: 15px;
 }

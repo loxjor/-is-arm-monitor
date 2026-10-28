@@ -113,11 +113,14 @@ function pickAlongFace(
   faceHi: number,
   cursorS: number,
   ghostHalf: number,
-  others: readonly WallBody[],
+  walls: readonly WallBody[],
+  hostId: string,
 ): number | null {
   const blocked: Interval[] = [];
-  for (const other of others) {
-    if (other.polygon.length !== 4) {
+  // Хозяин грани пропускается здесь, а не отфильтрованной копией массива:
+  // findFaceHug зовётся на каждый mousemove, и копия на каждую стену — O(W²) аллокаций.
+  for (const other of walls) {
+    if (other.id === hostId || other.polygon.length !== 4) {
       continue;
     }
     const interval = clipSegmentToPolygon(origin, dir, faceLo, faceHi, other.polygon);
@@ -190,7 +193,6 @@ export function findFaceHug(
     const relY = cursor.y - wall.start.y;
     const cursorS = relX * u.x + relY * u.y;
     const cursorD = relX * perp.x + relY * perp.y;
-    const others = walls.filter((other) => other.id !== wall.id);
 
     for (const side of ['left', 'right'] as const) {
       const sigma = side === 'left' ? 1 : -1;
@@ -228,7 +230,7 @@ export function findFaceHug(
         x: wall.start.x + perp.x * wall.halfThickness * sigma,
         y: wall.start.y + perp.y * wall.halfThickness * sigma,
       };
-      const s = pickAlongFace(origin, u, faceLo, faceHi, cursorS, newHalf, others);
+      const s = pickAlongFace(origin, u, faceLo, faceHi, cursorS, newHalf, walls, wall.id);
       if (s === null) {
         continue;
       }

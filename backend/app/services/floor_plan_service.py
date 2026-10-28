@@ -1,5 +1,5 @@
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.models.floor_plan import FloorPlan
 from app.models.workspace import Workspace
@@ -9,7 +9,9 @@ from app.schemas.workspace import WorkspaceCreate, WorkspaceRead
 
 
 def list_floor_plans(db: Session) -> list[FloorPlan]:
-    return list(db.execute(select(FloorPlan).order_by(FloorPlan.updated_at.desc())).scalars())
+    # Списку нужна только краткая карточка (FloorPlanSummary) — документ сцены не читаем.
+    query = select(FloorPlan).options(defer(FloorPlan.scene)).order_by(FloorPlan.updated_at.desc())
+    return list(db.execute(query).scalars())
 
 
 def get_floor_plan(db: Session, floor_plan_id: int) -> FloorPlan | None:

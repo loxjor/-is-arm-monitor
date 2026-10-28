@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.security import hash_password
 from app.models import AppUser, Employee, Role
@@ -17,7 +17,14 @@ def list_roles(db: Session) -> list[Role]:
 
 
 def list_users(db: Session) -> list[AppUser]:
-    return list(db.scalars(select(AppUser).order_by(AppUser.login)))
+    # UserRead вкладывает роль и сотрудника — без selectinload это N+1.
+    return list(
+        db.scalars(
+            select(AppUser)
+            .options(selectinload(AppUser.role), selectinload(AppUser.employee))
+            .order_by(AppUser.login)
+        )
+    )
 
 
 def get_user(db: Session, user_id: int) -> AppUser:
