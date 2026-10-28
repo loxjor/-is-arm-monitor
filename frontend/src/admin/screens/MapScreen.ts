@@ -1,78 +1,170 @@
 import { ButtonLink, ChipGroup } from '../../design/components';
 import { api } from '../api/client';
-import type { FloorPlanSummary } from '../api/types';
+import type { FloorPlanSummary, MapConfig, MapTerritory } from '../api/types';
 import { can } from '../auth';
 import { formatDate, h } from '../ui/dom';
 import { errorMessage } from '../ui/toast';
 import type { FloorPlanCanvas } from '../../components/FloorPlanCanvas';
+import type { TerritoryMap } from '../ui/TerritoryMap';
 import type { RouteContext, Screen } from './Screen';
 
 const CONTAINER_ID = 'admin-map-canvas';
+// Схемы, ещё не привязанные ни к какой территории, — отдельный пункт списка.
+const NO_TERRITORY = 'none';
+
+interface PlanView {
+  container: HTMLElement;
+  floorChips: HTMLElement;
+  status: HTMLElement;
+  editorLink: HTMLAnchorElement;
+}
 
 /**
- * Просмотр плана этажа без редактирования. Холст карты и Konva грузятся
- * динамически — только когда открыт этот экран, остальные страницы их не тянут.
+ * «Карта»: сначала карта территорий OpenStreetMap со списком (#/map), по
+ * выбору территории — её схема без редактирования (#/map?territory=N&plan=M).
+ * OpenLayers, Konva и холст плана грузятся динамически — только на этом экране.
  */
 export class MapScreen implements Screen {
-  readonly title = 'Карта этажа';
-  readonly element: HTMLElement;
-  private readonly planChips = h('div');
-  private readonly floorChips = h('div');
-  private readonly status = h('span', { class: 'muted small' });
-  private readonly container = h('div', { id: CONTAINER_ID, class: 'map-wrap' });
-  // Ведёт в редактор на тот же план, что открыт здесь (index.html?plan=N).
-  private readonly editorLink = ButtonLink('Открыть в редакторе', '/index.html');
+  readonly title = 'Карта';
+  // map-page — карта занимает всю высоту окна под шапкой (см. admin.css).
+  readonly element = h('div', { class: 'map-page' });
+  private territoryMap: TerritoryMap | null = null;
   private canvas: FloorPlanCanvas | null = null;
   private destroyed = false;
 
   constructor(context: RouteContext) {
-    this.element = h(
-      'div',
-      null,
-      h('div', { class: 'page-head' },
-        h('div', null,
-          h('h1', null, this.title),
-          h('p', { class: 'muted' }, 'Колесо мыши — масштаб, перетаскивание — перемещение по плану.'),
-        ),
-        can('edit_floor_plans') ? this.editorLink : null,
-      ),
-      h('div', { class: 'filters' }, this.planChips, this.floorChips, this.status),
-      this.container,
-    );
-    void this.init(Number(context.query.get('plan')));
+    const territory = context.query.get('territory');
+    const plan = Number(context.query.get('plan')) || null;
+    if (territory === null && plan === null) void this.showTerritories();
+    else void this.showTerritory(territory, plan);
   }
 
-  private async init(presetId: number): Promise<void> {
-    let plans: FloorPlanSummary[];
+  // ─── Уровень 1: карта территорий ───────────────────────────────
+
+  private async showTerritories(): Promise<void> {
+    const status = h('p', { class: 'muted' }, 'Загрузка карты…');
+    this.element.replaceChildren(
+      h('div', { class: 'page-head' },
+        h('div', null,
+          h('h1', null, 'Карта территорий'),
+          h('p', { class: 'muted' }, 'Выберите территорию в списке или на карте, чтобы открыть её схему.'),
+        ),
+        can('edit_floor_plans') ? ButtonLink('Редактор схем', '#/schemas') : null,
+      ),
+      status,
+    );
     try {
-      plans = await api.get<FloorPlanSummary[]>('/floor-plans');
+      const [{ TerritoryMap }, config, territories, plans] = await Promise.all([
+        import('../ui/TerritoryMap'),
+        api.get<MapConfig>('/map/config'),
+        api.get<MapTerritory[]>('/territories'),
+        api.get<FloorPlanSummary[]>('/floor-plans'),
+      ]);
+      if (this.destroyed) return;
+      const loose = plans.filter((plan) => plan.building_id === null);
+      this.territoryMap = new TerritoryMap({
+        config,
+        territories,
+        renderDetails: (territory) => this.territoryDetails(territory),
+        footer: loose.length
+          ? [h('a', { class: 'territory-plan-link', href: `#/map?territory=${NO_TERRITORY}` },
+              h('strong', null, 'Схемы без территории'),
+              h('span', { class: 'muted t-caption' }, `${loose.length} шт.`))]
+          : [],
+      });
+      status.replaceWith(this.territoryMap.element);
+      this.territoryMap.mount();
     } catch (error) {
-      this.status.textContent = errorMessage(error);
+      status.textContent = `Не удалось загрузить карту: ${errorMessage(error)}`;
+    }
+  }
+
+  private territoryDetails(territory: MapTerritory): HTMLElement {
+    const { plan } = territory;
+    if (!plan) return h('p', { class: 'muted t-caption' }, 'Схемы этой территории пока нет.');
+    return h('a', { class: 'territory-plan-link', href: `#/map?territory=${territory.building_id}` },
+      h('strong', null, 'Открыть схему'),
+      plan.description ? h('span', { class: 't-caption' }, plan.description) : null,
+      h('span', { class: 'muted t-caption' }, `Рабочих мест: ${plan.workspace_count}`),
+    );
+  }
+
+  // ─── Уровень 2: схема выбранной территории ─────────────────────
+
+  private async showTerritory(territoryParam: string | null, presetPlanId: number | null): Promise<void> {
+    const status = h('span', { class: 'muted small' }, 'Загрузка…');
+    const heading = h('h1', null, 'Схема');
+    const subtitle = h('p', { class: 'muted' });
+    const planChips = h('div');
+    const view: PlanView = {
+      container: h('div', { id: CONTAINER_ID, class: 'map-wrap' }),
+      floorChips: h('div'),
+      status,
+      editorLink: ButtonLink('Открыть в редакторе', '/index.html'),
+    };
+    this.element.replaceChildren(
+      h('a', { class: 'back', href: '#/map' }, '← Все территории'),
+      h('div', { class: 'page-head' },
+        h('div', null, heading, subtitle),
+        can('edit_floor_plans') ? view.editorLink : null,
+      ),
+      h('div', { class: 'filters' }, planChips, view.floorChips, status),
+      view.container,
+    );
+
+    let plans: FloorPlanSummary[];
+    let territories: MapTerritory[];
+    try {
+      [plans, territories] = await Promise.all([
+        api.get<FloorPlanSummary[]>('/floor-plans'),
+        api.get<MapTerritory[]>('/territories'),
+      ]);
+    } catch (error) {
+      status.textContent = errorMessage(error);
       return;
     }
     if (this.destroyed) return;
-    if (plans.length === 0) {
-      this.container.replaceChildren(h('p', { class: 'table-empty' },
-        'Сохранённых планов пока нет. Их создаёт системный администратор в редакторе карты.'));
+
+    // Ссылка вида #/map?plan=N (из редактора) — территория берётся у самой схемы.
+    const preset = plans.find((plan) => plan.id === presetPlanId);
+    const buildingId = territoryParam === null
+      ? preset?.building_id ?? null
+      : territoryParam === NO_TERRITORY ? null : Number(territoryParam);
+    const territory = territories.find((t) => t.building_id === buildingId) ?? null;
+    if (buildingId !== null && !territory) {
+      status.textContent = 'Территория не найдена.';
       return;
     }
-    const initial = plans.some((p) => p.id === presetId) ? presetId : plans[0].id;
-    const chips = new ChipGroup<string>(
-      'План этажа',
-      plans.map((plan) => ({ value: String(plan.id), label: plan.name })),
-      String(initial),
-      (value) => void this.show(Number(value)),
+    heading.textContent = territory?.name ?? 'Схемы без территории';
+    subtitle.textContent = territory?.address ?? 'Схемы, которые ещё не привязаны к зданию на карте.';
+    document.title = `${heading.textContent} — АРМ Монитор`;
+
+    const own = plans.filter((plan) => plan.building_id === buildingId);
+    if (own.length === 0) {
+      status.textContent = '';
+      view.container.replaceChildren(h('p', { class: 'table-empty' },
+        'У этой территории пока нет схемы. Её создаёт администратор в редакторе схем.'));
+      return;
+    }
+    const initial = own.some((plan) => plan.id === presetPlanId) ? presetPlanId! : own[0].id;
+    // У территории одна схема; выбор нужен только среди схем без территории.
+    planChips.replaceChildren(
+      own.length > 1
+        ? new ChipGroup<string>(
+            'Схема',
+            own.map((plan) => ({ value: String(plan.id), label: plan.name })),
+            String(initial),
+            (value) => void this.showPlan(Number(value), own, view),
+          ).element
+        : '',
     );
-    this.planChips.replaceChildren(chips.element);
-    await this.show(initial, plans);
+    await this.showPlan(initial, own, view);
   }
 
-  private plans: FloorPlanSummary[] = [];
-
-  private async show(planId: number, plans?: FloorPlanSummary[]): Promise<void> {
-    if (plans) this.plans = plans;
-    this.status.textContent = 'Загрузка плана…';
-    this.editorLink.href = `/index.html?plan=${planId}`;
+  private async showPlan(planId: number, plans: FloorPlanSummary[], view: PlanView): Promise<void> {
+    const { container, floorChips, status, editorLink } = view;
+    status.textContent = 'Загрузка плана…';
+    editorLink.href = `/index.html?plan=${planId}`;
     try {
       const [{ FloorPlanCanvas }, { loadFloorPlan }] = await Promise.all([
         import('../../components/FloorPlanCanvas'),
@@ -82,15 +174,15 @@ export class MapScreen implements Screen {
       if (this.destroyed) return;
 
       this.canvas?.destroy();
-      this.container.replaceChildren();
-      const canvas = new FloorPlanCanvas(CONTAINER_ID, this.container.clientWidth, this.container.clientHeight);
+      container.replaceChildren();
+      const canvas = new FloorPlanCanvas(CONTAINER_ID, container.clientWidth, container.clientHeight);
       this.canvas = canvas;
       canvas.setMode('view');
       canvas.showFloor(plan.floors[0].scene);
       canvas.resetView();
       // Вид (масштаб и сдвиг) при смене этажа не сбрасываем: этажи одного
       // здания совпадают в плане, удобно смотреть одно и то же место.
-      this.floorChips.replaceChildren(
+      floorChips.replaceChildren(
         plan.floors.length > 1
           ? new ChipGroup<string>(
               'Этаж',
@@ -104,15 +196,17 @@ export class MapScreen implements Screen {
           : '',
       );
       const desks = plan.floors.reduce((sum, floor) => sum + floor.scene.workspaces.length, 0);
-      const updated = this.plans.find((p) => p.id === planId)?.updated_at;
-      this.status.textContent = `Рабочих мест: ${desks} · изменён ${formatDate(updated)}`;
+      const updated = plans.find((p) => p.id === planId)?.updated_at;
+      status.textContent = `Рабочих мест: ${desks} · изменён ${formatDate(updated)}`;
     } catch (error) {
-      this.status.textContent = `Не удалось загрузить план: ${errorMessage(error)}`;
+      status.textContent = `Не удалось загрузить план: ${errorMessage(error)}`;
     }
   }
 
   destroy(): void {
     this.destroyed = true;
+    this.territoryMap?.destroy();
+    this.territoryMap = null;
     this.canvas?.destroy();
     this.canvas = null;
   }

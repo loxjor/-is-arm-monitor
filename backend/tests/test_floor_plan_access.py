@@ -31,4 +31,6 @@ def test_every_role_can_view_but_only_admin_can_edit(client: TestClient) -> None
         assert client.get(f"{URL}/1", headers=headers).status_code == 200, user_login
         assert client.put(f"{URL}/1", json=payload, headers=headers).status_code == 403, user_login
         assert client.post(URL, json=payload, headers=headers).status_code == 403, user_login
+        assert client.patch(f"{URL}/1", json={"name": "X"}, headers=headers).status_code == 403, user_login
+        assert client.delete(f"{URL}/1", headers=headers).status_code == 403, user_login
     assert client.put(f"{URL}/1", json=payload, headers=admin).status_code == 200

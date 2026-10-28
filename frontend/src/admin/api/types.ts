@@ -181,5 +181,46 @@ export interface Profile {
 export interface FloorPlanSummary {
   id: number;
   name: string;
+  building_id: number | null;
+  description: string | null;
+  workspace_count: number;
+  created_at: string;
   updated_at: string;
+}
+
+/** Схема территории — называется так же, как территория; этажи внутри неё. */
+export interface TerritoryPlan {
+  id: number;
+  description: string | null;
+  workspace_count: number;
+  updated_at: string;
+}
+
+/** Территория — здание из справочника с точкой на карте OpenStreetMap. */
+export interface MapTerritory {
+  building_id: number;
+  name: string;
+  address: string;
+  floors_count: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  /** null — схему ещё не создали. */
+  plan: TerritoryPlan | null;
+}
+
+export interface MapConfig {
+  tile_url: string;
+  attribution: string;
+  max_zoom: number;
+  /** Запад, юг, восток, север — регион карты; за его пределы она не выходит. */
+  bounds: [number, number, number, number];
+  center: [number, number];
+  zoom: number;
+  geocoder: boolean;
+}
+
+export interface GeocodeResult {
+  address: string;
+  latitude: number;
+  longitude: number;
 }

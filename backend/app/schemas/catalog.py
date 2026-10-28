@@ -50,6 +50,9 @@ class BuildingCreate(BaseModel):
 
 class BuildingRead(_Read, BuildingCreate):
     building_id: int
+    # Точку на карте ставят в «Редакторе схем»; справочник её только показывает.
+    latitude: float | None = None
+    longitude: float | None = None
 
 
 class RoomCreate(BaseModel):

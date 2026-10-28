@@ -19,6 +19,7 @@ import { MapScreen } from './screens/MapScreen';
 import { MyEquipmentScreen } from './screens/MyEquipmentScreen';
 import { NewTicketScreen } from './screens/NewTicketScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
+import { SchemasScreen } from './screens/SchemasScreen';
 import { TicketCardScreen } from './screens/TicketCardScreen';
 import { TicketListScreen } from './screens/TicketListScreen';
 import { UsersScreen } from './screens/UsersScreen';
@@ -51,6 +52,7 @@ const ROUTES: Route[] = [
   { pattern: /^\/tickets\/new$/, permission: 'create_tickets', create: (context) => new NewTicketScreen(context) },
   { pattern: /^\/tickets\/(\d+)$/, create: (context) => new TicketCardScreen(context) },
   { pattern: /^\/map$/, create: (context) => new MapScreen(context) },
+  { pattern: /^\/schemas$/, permission: 'edit_floor_plans', create: (context) => new SchemasScreen(context) },
   { pattern: /^\/catalogs$/, permission: 'view_catalogs', create: () => new CatalogScreen(CATALOG_DEFS[0]) },
   ...CATALOG_DEFS.map((def) => ({ pattern: new RegExp(`^/catalogs/${def.path}$`), permission: 'view_catalogs' as const, create: () => new CatalogScreen(def) })),
   { pattern: /^\/users$/, permission: 'manage_users', create: () => new UsersScreen() },
@@ -76,15 +78,15 @@ function navGroups(): TreeNavGroup[] {
         { href: '#/tickets/new', label: 'Новая заявка', permission: 'create_tickets' },
       ],
     },
-    // Карта — самостоятельный пункт на уровне групп, без подпунктов.
-    { title: 'Карта этажа', href: '#/map', items: [] },
+    // Карта территорий — самостоятельный пункт на уровне групп, без подпунктов.
+    { title: 'Карта', href: '#/map', items: [] },
     {
       title: 'Учёт',
       items: [
         // Сотруднику реестр не нужен: всё его — в «Моём имуществе».
         ...(personal ? [] : [{ href: '#/equipment', label: 'Реестр оборудования' }]),
         { href: '#/tickets', label: personal ? 'Мои заявки' : 'Заявки' },
-        { href: '/index.html', label: 'Редактор плана', permission: 'edit_floor_plans' },
+        { href: '#/schemas', label: 'Редактор схем', permission: 'edit_floor_plans' },
         // Справочники — одним пунктом; рабочий инструмент тех, кто видит весь парк,
         // сотруднику и руководителю подразделения не нужны.
         ...(currentUser().scope === 'all' ? [{ href: '#/catalogs', label: 'Справочники', permission: 'view_catalogs' as const }] : []),
@@ -195,7 +197,7 @@ function showShell(): void {
 const REFLOWING_BLOCKS = [
   '.org-line > .org', '.topbar > .user', '.back', '.page-head > *', '.profile-head', '.filters > *',
   '.spec-row > *', '.tiles > *', '.quick-links > *', '.cards > *', '.card',
-  '.equipment-cards > *', '.map-wrap', '.table-wrap', '.pager > *',
+  '.equipment-cards > *', '.map-wrap', '.territory-explorer', '.table-wrap', '.pager > *',
 ].join(', ');
 
 // Свёрнутое меню на широком экране запоминается (только в этом браузере).

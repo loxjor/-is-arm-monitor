@@ -156,6 +156,97 @@ class TestRoundTrip:
         assert "scene" not in listed[0]
 
 
+    def territory(self, client: TestClient, name: str = "Корпус А") -> int:
+        body = {"name": name, "address": "г. Москва, ул. Тестовая, 1", "latitude": 55.75, "longitude": 37.61}
+        return client.post("/api/v1/territories", json=body).json()["building_id"]
+
+    def test_list_has_territory_description_and_desk_count(self, client: TestClient) -> None:
+        building_id = self.territory(client)
+        payload = room_payload()
+        payload["building_id"] = building_id
+        payload["description"] = "  Второй этаж, отдел кадров "
+        client.post(URL, json=payload)
+        client.post(URL, json=room_payload())
+        listed = client.get(URL).json()
+        assert len(listed) == 2
+        [mine] = client.get(URL, params={"building_id": building_id}).json()
+        assert mine["building_id"] == building_id
+        # Схема территории называется как территория, а не как прислали.
+        assert mine["name"] == "Корпус А"
+        assert mine["description"] == "Второй этаж, отдел кадров"
+        assert mine["workspace_count"] == 1
+
+    def test_territory_plan_needs_no_name(self, client: TestClient) -> None:
+        payload = room_payload()
+        del payload["name"]
+        assert client.post(URL, json=payload).status_code == 422  # без территории название нужно
+        payload["building_id"] = self.territory(client)
+        body = client.post(URL, json=payload).json()
+        assert body["name"] == "Корпус А"
+
+    def test_one_plan_per_territory(self, client: TestClient) -> None:
+        payload = room_payload()
+        payload["building_id"] = self.territory(client)
+        assert client.post(URL, json=payload).status_code == 201
+        assert client.post(URL, json=payload).status_code == 409
+        other = client.post(URL, json=room_payload()).json()["id"]
+        assert client.patch(f"{URL}/{other}", json={"building_id": payload["building_id"]}).status_code == 409
+
+    def test_renaming_territory_renames_its_plan(self, client: TestClient) -> None:
+        building_id = self.territory(client)
+        payload = room_payload()
+        payload["building_id"] = building_id
+        plan_id = client.post(URL, json=payload).json()["id"]
+        client.patch(f"/api/v1/territories/{building_id}", json={"name": "Корпус Б"})
+        assert client.get(f"{URL}/{plan_id}").json()["name"] == "Корпус Б"
+        # Отвязанная схема сохраняет имя территории.
+        assert client.patch(f"{URL}/{plan_id}", json={"building_id": None}).json()["name"] == "Корпус Б"
+
+    def test_put_from_editor_keeps_territory_and_description(self, client: TestClient) -> None:
+        payload = room_payload()
+        payload["building_id"] = self.territory(client)
+        payload["description"] = "Описание"
+        plan_id = client.post(URL, json=payload).json()["id"]
+        # Редактор шлёт план без территории и описания — они не должны пропасть,
+        # а присланное название не заменяет имя территории.
+        body = client.put(f"{URL}/{plan_id}", json=room_payload()).json()
+        assert body["building_id"] == payload["building_id"]
+        assert body["description"] == "Описание"
+        assert body["name"] == "Корпус А"
+
+    def test_patch_changes_only_given_fields(self, client: TestClient) -> None:
+        building_id = self.territory(client)
+        plan_id = client.post(URL, json=room_payload()).json()["id"]
+        body = client.patch(f"{URL}/{plan_id}", json={"building_id": building_id, "description": "  "}).json()
+        assert body["name"] == "Корпус А"
+        assert body["building_id"] == building_id
+        assert body["description"] is None
+        assert body["workspaces"]  # геометрию PATCH не трогает
+        # Название схемы территории не меняется — только у схемы без территории.
+        assert client.patch(f"{URL}/{plan_id}", json={"name": "Склад"}).json()["name"] == "Корпус А"
+        body = client.patch(f"{URL}/{plan_id}", json={"name": "Склад", "building_id": None}).json()
+        assert body["name"] == "Склад"
+        assert body["building_id"] is None
+
+    def test_unknown_territory_is_rejected(self, client: TestClient) -> None:
+        payload = room_payload()
+        payload["building_id"] = 999
+        assert client.post(URL, json=payload).status_code == 422
+        plan_id = client.post(URL, json=room_payload()).json()["id"]
+        assert client.patch(f"{URL}/{plan_id}", json={"building_id": 999}).status_code == 422
+
+    def test_patch_rejects_unknown_field_and_missing_plan(self, client: TestClient) -> None:
+        plan_id = client.post(URL, json=room_payload()).json()["id"]
+        assert client.patch(f"{URL}/{plan_id}", json={"scene": {}}).status_code == 422
+        assert client.patch(f"{URL}/{plan_id}", json={"name": ""}).status_code == 422
+        assert client.patch(f"{URL}/999", json={"name": "X"}).status_code == 404
+
+    def test_delete_removes_plan(self, client: TestClient) -> None:
+        plan_id = client.post(URL, json=room_payload()).json()["id"]
+        assert client.delete(f"{URL}/{plan_id}").status_code == 204
+        assert client.get(f"{URL}/{plan_id}").status_code == 404
+        assert client.delete(f"{URL}/{plan_id}").status_code == 404
+
     def test_room_names_round_trip(self, client: TestClient) -> None:
         payload = room_payload()
         payload["scene"]["rooms"] = [

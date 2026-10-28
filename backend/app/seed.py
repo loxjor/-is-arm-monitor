@@ -127,10 +127,13 @@ def seed_floor_plan(db: Session) -> None:
         "301-1": (60, 60), "301-2": (240, 60), "301-3": (420, 60),
         "302-1": (660, 60), "302-2": (840, 60), "302-3": (660, 300),
     }
+    building = db.scalar(select(Building).where(Building.name == "Главное здание"))
     floor_plan_service.create_floor_plan(
         db,
         FloorPlanCreate(
             name="Главное здание, 3 этаж (каб. 301–302)",
+            building_id=building.building_id if building else None,
+            description="Кабинеты 301 и 302 с перегородкой, столы по номерам рабочих мест.",
             width_cm=1200,
             height_cm=600,
             scene={
@@ -293,7 +296,14 @@ def seed_reference_data(db: Session) -> None:
     ]
     db.add_all(employees)
 
-    building = Building(name="Главное здание", address="г. Москва, пер. Орликов, д. 3, корп. А", floors_count=8)
+    # Точка на карте территорий — примерная, на доме по адресу.
+    building = Building(
+        name="Главное здание",
+        address="г. Москва, пер. Орликов, д. 3, корп. А",
+        floors_count=8,
+        latitude=55.7699,
+        longitude=37.6532,
+    )
     db.add(building)
 
     rooms = [

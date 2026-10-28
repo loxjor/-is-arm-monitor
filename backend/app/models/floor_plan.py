@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, CheckConstraint, DateTime, Float, SmallInteger, String, func
+from sqlalchemy import JSON, CheckConstraint, DateTime, Float, ForeignKey, SmallInteger, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -31,6 +31,13 @@ class FloorPlan(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255))
+    # Территория (здание на карте), к которой относится схема; NULL — пока ни к какой.
+    # У территории одна схема (этажи — внутри неё), и называется схема так же,
+    # как территория: имя берётся у здания, своё name — только у непривязанных.
+    building_id: Mapped[int | None] = mapped_column(
+        ForeignKey("building.building_id", ondelete="SET NULL"), index=True, unique=True, default=None
+    )
+    description: Mapped[str | None] = mapped_column(Text, default=None)
     width_cm: Mapped[float] = mapped_column(Float)
     height_cm: Mapped[float] = mapped_column(Float)
     background_image_url: Mapped[str | None] = mapped_column(String(2048), default=None)
@@ -43,6 +50,7 @@ class FloorPlan(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    building: Mapped["Building | None"] = relationship(lazy="joined")
     workspaces: Mapped[list["Workspace"]] = relationship(
         back_populates="floor_plan", cascade="all, delete-orphan", order_by="Workspace.id"
     )

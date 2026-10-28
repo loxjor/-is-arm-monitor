@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, LargeBinary, Numeric, SmallInteger, String
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, LargeBinary, Numeric, SmallInteger, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -50,11 +50,17 @@ class Employee(Base):
 
 class Building(Base):
     __tablename__ = "building"
+    __table_args__ = (
+        CheckConstraint("(latitude IS NULL) = (longitude IS NULL)", name="coordinates_pair"),
+    )
 
     building_id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(50))
     address: Mapped[str] = mapped_column(String(255))
     floors_count: Mapped[int | None] = mapped_column(SmallInteger)
+    # Точка на доме на карте OpenStreetMap (WGS 84); без неё здания нет на карте территорий.
+    latitude: Mapped[float | None] = mapped_column(Float, default=None)
+    longitude: Mapped[float | None] = mapped_column(Float, default=None)
 
     rooms: Mapped[list["Room"]] = relationship(back_populates="building")
 
