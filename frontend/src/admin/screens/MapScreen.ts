@@ -17,6 +17,7 @@ export class MapScreen implements Screen {
   readonly title = 'Карта этажа';
   readonly element: HTMLElement;
   private readonly planChips = h('div');
+  private readonly floorChips = h('div');
   private readonly status = h('span', { class: 'muted small' });
   private readonly container = h('div', { id: CONTAINER_ID, class: 'map-wrap' });
   // Ведёт в редактор на тот же план, что открыт здесь (index.html?plan=N).
@@ -35,7 +36,7 @@ export class MapScreen implements Screen {
         ),
         can('edit_floor_plans') ? this.editorLink : null,
       ),
-      h('div', { class: 'filters' }, this.planChips, this.status),
+      h('div', { class: 'filters' }, this.planChips, this.floorChips, this.status),
       this.container,
     );
     void this.init(Number(context.query.get('plan')));
@@ -77,17 +78,34 @@ export class MapScreen implements Screen {
         import('../../components/FloorPlanCanvas'),
         import('../../api/floorPlans'),
       ]);
-      const scene = await loadFloorPlan(planId);
+      const plan = await loadFloorPlan(planId);
       if (this.destroyed) return;
 
       this.canvas?.destroy();
       this.container.replaceChildren();
-      this.canvas = new FloorPlanCanvas(CONTAINER_ID, this.container.clientWidth, this.container.clientHeight);
-      this.canvas.setMode('view');
-      this.canvas.loadScene(scene);
-      this.canvas.resetView();
+      const canvas = new FloorPlanCanvas(CONTAINER_ID, this.container.clientWidth, this.container.clientHeight);
+      this.canvas = canvas;
+      canvas.setMode('view');
+      canvas.showFloor(plan.floors[0].scene);
+      canvas.resetView();
+      // Вид (масштаб и сдвиг) при смене этажа не сбрасываем: этажи одного
+      // здания совпадают в плане, удобно смотреть одно и то же место.
+      this.floorChips.replaceChildren(
+        plan.floors.length > 1
+          ? new ChipGroup<string>(
+              'Этаж',
+              plan.floors.map((floor) => ({ value: floor.id, label: floor.name })),
+              plan.floors[0].id,
+              (floorId) => {
+                const floor = plan.floors.find((f) => f.id === floorId);
+                if (floor) canvas.showFloor(floor.scene);
+              },
+            ).element
+          : '',
+      );
+      const desks = plan.floors.reduce((sum, floor) => sum + floor.scene.workspaces.length, 0);
       const updated = this.plans.find((p) => p.id === planId)?.updated_at;
-      this.status.textContent = `Рабочих мест: ${scene.workspaces.length} · изменён ${formatDate(updated)}`;
+      this.status.textContent = `Рабочих мест: ${desks} · изменён ${formatDate(updated)}`;
     } catch (error) {
       this.status.textContent = `Не удалось загрузить план: ${errorMessage(error)}`;
     }

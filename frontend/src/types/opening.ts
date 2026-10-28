@@ -38,3 +38,14 @@ export const OPENING_DEFAULTS: Record<OpeningKind, OpeningDefaults> = {
   windowway: { width: c(120), height: c(150), sillHeight: c(85), minWidth: c(30), maxWidth: c(600), minHeight: c(30), maxHeight: c(200) },
   window: { width: c(120), height: c(150), sillHeight: c(85), minWidth: c(30), maxWidth: c(600), minHeight: c(30), maxHeight: c(200) },
 };
+
+// Ходовые размеры, см: дверные полотна 60–90 (+ коробка — это и есть ширина
+// проёма на плане), двустворчатые — от 120; окна — типовые ширины блоков
+// по ГОСТ 23166, округлённые до 10 см. Все внутри пределов OPENING_DEFAULTS.
+export const OPENING_WIDTH_PRESETS: Record<OpeningKind, readonly number[]> = {
+  door: [60, 70, 80, 90, 100],
+  door_double: [120, 140, 150, 180],
+  doorway: [70, 80, 90, 100, 120],
+  window: [60, 90, 120, 150, 180],
+  windowway: [60, 90, 120, 150, 180],
+};

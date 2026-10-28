@@ -1,4 +1,4 @@
-import type { WallOpening } from '../types/opening';
+import { OPENING_DEFAULTS, type WallOpening } from '../types/opening';
 import { cm } from './scale';
 import type { WallEndpoint } from './geometry';
 
@@ -84,7 +84,7 @@ export function projectPointToSegmentOffset(
   };
 }
 
-export function openingAxisRange(opening: Pick<WallOpening, 'offset' | 'width'>): [number, number] {
+export function openingAxisRange(opening: OccupiedRange): [number, number] {
   return [opening.offset - opening.width / 2, opening.offset + opening.width / 2];
 }
 
@@ -93,7 +93,7 @@ export function openingCutPolygon(
   start: WallEndpoint,
   end: WallEndpoint,
   thickness: number,
-  opening: Pick<WallOpening, 'offset' | 'width'>,
+  opening: OccupiedRange,
 ): WallEndpoint[] {
   const frame = axisFrame(start, end);
   if (!frame) {
@@ -110,16 +110,18 @@ export function openingCutPolygon(
 
 /**
  * Условный знак двери на плане: петля сидит на грани стены со стороны
- * открывания, полотно (открытое на 90°) идёт от неё перпендикулярно стене.
- * Дуга — от закрытого положения (вдоль оси к проёму) к открытому; endAngle =
- * startAngle ± 90, знак зависит от стороны открывания, поэтому углы не
- * нормализованы в [0, 360).
+ * открывания, полотно приоткрыто на openAngleDeg (90 — перпендикулярно
+ * стене). Дуга — от закрытого положения (вдоль оси к проёму) к открытому;
+ * endAngle = startAngle ± openAngleDeg, знак зависит от стороны открывания,
+ * поэтому углы не нормализованы в [0, 360). Толщина полотна откладывается в
+ * сторону закрытого положения.
  */
 export function doorLeafGeometry(
   start: WallEndpoint,
   end: WallEndpoint,
   thickness: number,
-  opening: Pick<WallOpening, 'offset' | 'width' | 'hinge' | 'swing'>,
+  opening: OccupiedRange & Pick<WallOpening, 'hinge' | 'swing'>,
+  openAngleDeg = 90,
 ): LeafGeometry | null {
   const frame = axisFrame(start, end);
   if (!frame) {
@@ -135,12 +137,17 @@ export function doorLeafGeometry(
     x: start.x + frame.dir.x * hingeAlong + normal.x * (thickness / 2),
     y: start.y + frame.dir.y * hingeAlong + normal.y * (thickness / 2),
   };
-  const tip = { x: hinge.x + normal.x * opening.width, y: hinge.y + normal.y * opening.width };
+  const angle = (openAngleDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const leafDir = { x: closed.x * cos + normal.x * sin, y: closed.y * cos + normal.y * sin };
+  const toClosed = { x: closed.x * sin - normal.x * cos, y: closed.y * sin - normal.y * cos };
+  const tip = { x: hinge.x + leafDir.x * opening.width, y: hinge.y + leafDir.y * opening.width };
   const t = DOOR_LEAF_THICKNESS;
 
   const startAngle = (Math.atan2(closed.y, closed.x) * 180) / Math.PI;
-  const leafAngle = (Math.atan2(normal.y, normal.x) * 180) / Math.PI;
-  let delta = leafAngle - startAngle;
+  const normalAngle = (Math.atan2(normal.y, normal.x) * 180) / Math.PI;
+  let delta = normalAngle - startAngle;
   while (delta > 180) delta -= 360;
   while (delta <= -180) delta += 360;
 
@@ -149,10 +156,10 @@ export function doorLeafGeometry(
     leaf: [
       hinge,
       tip,
-      { x: tip.x + closed.x * t, y: tip.y + closed.y * t },
-      { x: hinge.x + closed.x * t, y: hinge.y + closed.y * t },
+      { x: tip.x + toClosed.x * t, y: tip.y + toClosed.y * t },
+      { x: hinge.x + toClosed.x * t, y: hinge.y + toClosed.y * t },
     ],
-    arc: { center: hinge, radius: opening.width, startAngle, endAngle: startAngle + delta },
+    arc: { center: hinge, radius: opening.width, startAngle, endAngle: startAngle + Math.sign(delta) * openAngleDeg },
   };
 }
 
@@ -202,4 +209,40 @@ export function redistributeOpeningsOnSplit(
     const o = result.get(index);
     return o ? [o] : [];
   });
+}
+
+/** Параметры проёма, которые задаёт пользователь (инструмент или выделенный проём). */
+export interface OpeningOptions {
+  kind: WallOpening['kind'];
+  width: number;
+  height: number;
+  sillHeight: number;
+}
+
+// Подоконник выше 2.5 м на плане этажа не встречается — это уже фрамуга, а не окно.
+const MAX_SILL_HEIGHT_CM = 250;
+
+/**
+ * Применяет правку к параметрам проёма и приводит их в допустимые для вида
+ * пределы (OPENING_DEFAULTS): смена вида подставляет его стандартную ширину,
+ * только если текущая в новые пределы не влезает; у дверей и проёмов
+ * подоконника нет. Всё в целых сантиметрах.
+ */
+export function normalizeOpeningOptions(current: OpeningOptions, patch: Partial<OpeningOptions>): OpeningOptions {
+  const kind = patch.kind ?? current.kind;
+  const limits = OPENING_DEFAULTS[kind];
+  const clamp = (value: number, min: number, max: number, fallback: number): number =>
+    Number.isFinite(value) ? Math.round(Math.min(Math.max(value, min), max)) : fallback;
+  const kindChanged = kind !== current.kind;
+  const width = patch.width ?? current.width;
+  const fitsWidth = width >= limits.minWidth && width <= limits.maxWidth;
+  const isWindow = kind === 'window' || kind === 'windowway';
+  return {
+    kind,
+    width: kindChanged && !fitsWidth ? limits.width : clamp(width, limits.minWidth, limits.maxWidth, limits.width),
+    height: clamp(patch.height ?? (kindChanged ? limits.height : current.height), limits.minHeight, limits.maxHeight, limits.height),
+    sillHeight: isWindow
+      ? clamp(patch.sillHeight ?? (kindChanged ? limits.sillHeight : current.sillHeight), 0, MAX_SILL_HEIGHT_CM, limits.sillHeight)
+      : 0,
+  };
 }

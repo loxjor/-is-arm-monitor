@@ -88,3 +88,48 @@ def test_scene_migration_moves_wall_graph_into_json_and_back(
     assert [tuple(row) for row in nodes] == [(0.0, 0.0), (300.0, 0.0)]
     assert [tuple(row) for row in segments] == [(12.0,)]
     engine.dispose()
+
+
+def test_floors_migration_keeps_first_floor_on_downgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import json
+
+    url = f"sqlite:///{tmp_path / 'floors.db'}"
+    config = alembic_config(url, monkeypatch)
+    command.upgrade(config, "head")
+
+    floors = {
+        "floors": [
+            {"id": "f1", "name": "1 этаж", "nodes": [{"id": "a", "x": 0, "y": 0}], "segments": [], "openings": [], "rooms": []},
+            {"id": "f2", "name": "2 этаж", "nodes": [{"id": "b", "x": 5, "y": 5}], "segments": [], "openings": [], "rooms": []},
+        ]
+    }
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO floor_plans (id, name, width_cm, height_cm, scene, scene_version) "
+                "VALUES (1, 'План', 5000, 5000, :scene, 4)"
+            ),
+            {"scene": json.dumps(floors)},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO workspaces (id, floor_plan_id, client_id, x, y, width, height, rotation, label, status, floor_id) "
+                "VALUES (1, 1, 'ws', 1, 2, 120, 80, 0, 'Стол', 'free', 'f2')"
+            )
+        )
+
+    command.downgrade(config, "-1")
+
+    with engine.connect() as connection:
+        scene_raw, version = connection.execute(
+            text("SELECT scene, scene_version FROM floor_plans WHERE id = 1")
+        ).one()
+        columns = [column["name"] for column in inspect(engine).get_columns("workspaces")]
+    scene = json.loads(scene_raw) if isinstance(scene_raw, str) else scene_raw
+    assert version == 3
+    assert scene["nodes"] == [{"id": "a", "x": 0, "y": 0}]
+    assert "floor_id" not in columns
+    engine.dispose()

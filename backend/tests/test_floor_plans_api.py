@@ -91,22 +91,26 @@ class TestRoundTrip:
         plan_id = created.json()["id"]
 
         body = client.get(f"{URL}/{plan_id}").json()
-        # Сцена всегда отдаётся в актуальной версии; v2 поднимается до v3 пустым списком проёмов.
-        assert body["scene"]["version"] == 3
-        assert body["scene"]["openings"] == []
-        assert [node["id"] for node in body["scene"]["nodes"]] == ["n1", "n2", "n3", "n4"]
-        assert body["scene"]["segments"][0] == {
+        # Сцена всегда отдаётся в актуальной версии: плоский v2 становится единственным этажом.
+        assert body["scene"]["version"] == 4
+        [floor] = body["scene"]["floors"]
+        assert (floor["id"], floor["name"]) == ("floor-1", "1 этаж")
+        assert floor["openings"] == []
+        assert floor["rooms"] == []
+        assert [node["id"] for node in floor["nodes"]] == ["n1", "n2", "n3", "n4"]
+        assert floor["segments"][0] == {
             "id": "s1",
             "start_node_id": "n1",
             "end_node_id": "n2",
             "thickness": 10,
         }
         assert body["workspaces"][0]["client_id"] == "ws-1"
+        assert body["workspaces"][0]["floor_id"] == "floor-1"
 
     def test_v3_with_openings_round_trip(self, client: TestClient) -> None:
         created = client.post(URL, json=with_door(room_payload()))
         assert created.status_code == 201, created.text
-        opening = created.json()["scene"]["openings"][0]
+        opening = created.json()["scene"]["floors"][0]["openings"][0]
         assert opening["segment_id"] == "s1"
         assert opening["kind"] == "door"
         assert opening["swing"] == "left"
@@ -150,6 +154,61 @@ class TestRoundTrip:
         listed = client.get(URL).json()
         assert len(listed) == 1
         assert "scene" not in listed[0]
+
+
+    def test_room_names_round_trip(self, client: TestClient) -> None:
+        payload = room_payload()
+        payload["scene"]["rooms"] = [
+            {"id": "r1", "x": 150, "y": 125, "title": "Коридор", "note": "бывший каб. 3"},
+            {"id": "r2", "x": 50, "y": 50, "title": "каб. 4"},
+        ]
+        created = client.post(URL, json=payload)
+        assert created.status_code == 201, created.text
+        body = client.get(f"{URL}/{created.json()['id']}").json()
+        assert body["scene"]["floors"][0]["rooms"] == [
+            {"id": "r1", "x": 150, "y": 125, "title": "Коридор", "note": "бывший каб. 3"},
+            {"id": "r2", "x": 50, "y": 50, "title": "каб. 4", "note": ""},
+        ]
+
+
+    def test_floors_round_trip(self, client: TestClient) -> None:
+        created = client.post(URL, json=two_floors_payload())
+        assert created.status_code == 201, created.text
+        body = client.get(f"{URL}/{created.json()['id']}").json()
+        assert body["scene"]["version"] == 4
+        assert [(f["id"], f["name"]) for f in body["scene"]["floors"]] == [("f1", "1 этаж"), ("f2", "2 этаж")]
+        assert [n["id"] for n in body["scene"]["floors"][1]["nodes"]] == ["m1", "m2"]
+        assert {w["client_id"]: w["floor_id"] for w in body["workspaces"]} == {"ws-1": "f1", "ws-2": "f2"}
+        assert [(f["kind"], f["variant"], f["rotation"]) for f in body["scene"]["floors"][1]["fixtures"]] == [
+            ("stairs", "u-two", 90),
+            ("elevator", None, 0),
+        ]
+        assert body["scene"]["floors"][0]["fixtures"] == []
+
+
+def two_floors_payload() -> dict[str, Any]:
+    """Тот же план, но двумя этажами: на втором — одна стена и своё рабочее место."""
+    payload = room_payload()
+    flat = payload["scene"]
+    payload["scene"] = {
+        "version": 4,
+        "floors": [
+            {"id": "f1", "name": "1 этаж", "nodes": flat["nodes"], "segments": flat["segments"]},
+            {
+                "id": "f2",
+                "name": "2 этаж",
+                "nodes": [{"id": "m1", "x": 0, "y": 0}, {"id": "m2", "x": 200, "y": 0}],
+                "segments": [{"id": "t1", "start_node_id": "m1", "end_node_id": "m2", "thickness": 10}],
+                "fixtures": [
+                    {"id": "st1", "kind": "stairs", "variant": "u-two", "x": 100, "y": 100, "width": 240, "height": 300, "rotation": 90},
+                    {"id": "el1", "kind": "elevator", "x": 300, "y": 100, "width": 160, "height": 160},
+                ],
+            },
+        ],
+    }
+    payload["workspaces"][0]["floor_id"] = "f1"
+    payload["workspaces"].append({**payload["workspaces"][0], "client_id": "ws-2", "floor_id": "f2"})
+    return payload
 
 
 class TestValidation:
@@ -200,6 +259,48 @@ class TestValidation:
     def test_non_positive_plan_size(self, client: TestClient) -> None:
         payload = room_payload()
         payload["width_cm"] = 0
+        self.post(client, payload)
+
+    def test_empty_room_title(self, client: TestClient) -> None:
+        payload = room_payload()
+        payload["scene"]["rooms"] = [{"id": "r1", "x": 150, "y": 125, "title": ""}]
+        self.post(client, payload)
+
+    def test_duplicate_room_id(self, client: TestClient) -> None:
+        payload = room_payload()
+        room = {"id": "r1", "x": 150, "y": 125, "title": "каб. 1"}
+        payload["scene"]["rooms"] = [room, {**room, "x": 50}]
+        self.post(client, payload)
+
+    def test_workspace_on_unknown_floor(self, client: TestClient) -> None:
+        payload = two_floors_payload()
+        payload["workspaces"][1]["floor_id"] = "f9"
+        self.post(client, payload)
+
+    def test_floor_graph_is_checked(self, client: TestClient) -> None:
+        payload = two_floors_payload()
+        # Сегмент второго этажа не может опираться на узел первого.
+        payload["scene"]["floors"][1]["segments"][0]["end_node_id"] = "n1"
+        self.post(client, payload)
+
+    def test_v4_without_floors(self, client: TestClient) -> None:
+        payload = room_payload()
+        payload["scene"]["version"] = 4
+        self.post(client, payload)
+
+    def test_unknown_fixture_kind(self, client: TestClient) -> None:
+        payload = two_floors_payload()
+        payload["scene"]["floors"][1]["fixtures"][0]["kind"] = "escalator"
+        self.post(client, payload)
+
+    def test_unknown_stair_variant(self, client: TestClient) -> None:
+        payload = two_floors_payload()
+        payload["scene"]["floors"][1]["fixtures"][0]["variant"] = "escalator"
+        self.post(client, payload)
+
+    def test_duplicate_floor_id(self, client: TestClient) -> None:
+        payload = two_floors_payload()
+        payload["scene"]["floors"][1]["id"] = "f1"
         self.post(client, payload)
 
     def test_unknown_field_is_rejected(self, client: TestClient) -> None:

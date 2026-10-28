@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSegmentPolygon, computeNodeFaceVertices, type NodeRay } from './wallPolygon';
+import { buildNodeHub, buildSegmentPolygon, computeNodeFaceVertices, type NodeRay } from './wallPolygon';
 
 function ray(key: string, dir: { x: number; y: number }, halfThickness: number): NodeRay {
   const len = Math.hypot(dir.x, dir.y);
@@ -213,6 +213,23 @@ describe('computeNodeFaceVertices — вырожденный случай: тр�
     // соседними лучами -> 6 упоминаний, но ровно 3 различных точки.
     expect(distinct.size).toBe(3);
   });
+
+  it('примыкающая стена упирается в ближнюю грань, дальняя грань остаётся сплошной', () => {
+    const faces = computeNodeFaceVertices({ x: 0, y: 0 }, [
+      ray('west', { x: -1, y: 0 }, 10),
+      ray('east', { x: 1, y: 0 }, 10),
+      ray('south', { x: 0, y: 1 }, 10),
+    ]);
+    const south = faces.get('south')!;
+
+    expect([south.left.y, south.right.y]).toEqual([10, 10]);
+    expect([south.left.x, south.right.x].sort((a, b) => a - b)).toEqual([-10, 10]);
+    // Северная грань (y = -10) у west и east сходится в одной точке над узлом.
+    const westNorth = faces.get('west')!.left;
+    const eastNorth = faces.get('east')!.right;
+    expect(westNorth).toEqual(eastNorth);
+    expect(westNorth.y).toBeCloseTo(-10);
+  });
 });
 
 describe('buildSegmentPolygon', () => {
@@ -232,5 +249,24 @@ describe('buildSegmentPolygon', () => {
       { x: 100, y: -10 },
       { x: 0, y: -10 },
     ]);
+  });
+});
+
+describe('buildNodeHub', () => {
+  it('T-стык — треугольник между торцами, вершина на сплошной грани', () => {
+    const rays = [
+      { key: 'west', dir: { x: -1, y: 0 }, halfThickness: 10 },
+      { key: 'east', dir: { x: 1, y: 0 }, halfThickness: 10 },
+      { key: 'south', dir: { x: 0, y: 1 }, halfThickness: 10 },
+    ];
+    const hub = buildNodeHub(rays, computeNodeFaceVertices({ x: 0, y: 0 }, rays));
+    const distinct = new Set(hub.map((p) => `${p.x.toFixed(3)},${p.y.toFixed(3)}`));
+
+    expect([...distinct].sort()).toEqual(['-10.000,10.000', '0.000,-10.000', '10.000,10.000']);
+  });
+
+  it('свободный конец — без сердцевины', () => {
+    const rays = [{ key: 'only', dir: { x: 1, y: 0 }, halfThickness: 10 }];
+    expect(buildNodeHub(rays, computeNodeFaceVertices({ x: 0, y: 0 }, rays))).toEqual([]);
   });
 });

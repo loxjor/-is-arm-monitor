@@ -1,6 +1,8 @@
 import type { WallNode, WallSegment } from '../types/wall';
 import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
-import type { SceneData } from '../types/scene';
+import type { PlanData, PlanFloor, RoomLabel, SceneData } from '../types/scene';
+import type { OpeningKind, WallOpening } from '../types/opening';
+import type { FixtureData, FixtureKind } from '../types/fixture';
 import { cm } from '../utils/scale';
 
 // Относительный адрес: Vite проксирует /api на бэкенд (vite.config.ts), поэтому
@@ -15,7 +17,7 @@ const DEFAULT_SCENE_SIZE_CM = 5000;
 // Геометрия едет на сервер одним документом scene (бэкенд хранит его как
 // JSONB, см. backend/app/schemas/scene.py) — с теми же строковыми id, что на
 // холсте, поэтому после загрузки ссылки сегментов на узлы остаются как есть.
-// version 2 — пока у сцены на фронтенде нет дверей и окон.
+// version 4 — этажи, у каждого свои стены, проёмы и подписи помещений.
 interface SceneNodeDto {
   id: string;
   x: number;
@@ -29,19 +31,55 @@ interface SceneSegmentDto {
   thickness: number;
 }
 
-interface ScenePayload {
-  version: 2;
+interface SceneRoomDto {
+  id: string;
+  x: number;
+  y: number;
+  title: string;
+  note: string;
+}
+
+interface SceneOpeningDto {
+  id: string;
+  segment_id: string;
+  kind: OpeningKind;
+  offset: number;
+  width: number;
+  height: number;
+  sill_height: number;
+  hinge: 'start' | 'end' | null;
+  swing: 'left' | 'right' | null;
+}
+
+interface SceneFixtureDto {
+  id: string;
+  kind: FixtureKind;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+}
+
+interface SceneFloorDto {
+  id: string;
+  name: string;
+  fixtures: SceneFixtureDto[];
   nodes: SceneNodeDto[];
   segments: SceneSegmentDto[];
+  openings: SceneOpeningDto[];
+  rooms: SceneRoomDto[];
+}
+
+interface ScenePayload {
+  version: 4;
+  floors: SceneFloorDto[];
 }
 
 interface SceneResponse {
-  // Сервер отдаёт сцену в актуальной версии; openings появятся во
-  // фронтендовой модели вместе с дверями и окнами.
+  // Сервер отдаёт сцену в актуальной версии — старые планы одним этажом.
   version: number;
-  nodes: SceneNodeDto[];
-  segments: SceneSegmentDto[];
-  openings: unknown[];
+  floors: SceneFloorDto[];
 }
 
 interface WorkspacePayload {
@@ -55,6 +93,7 @@ interface WorkspacePayload {
   rotation: number;
   label: string;
   status: WorkspaceStatus;
+  floor_id: string | null;
 }
 
 interface WorkspaceResponse extends WorkspacePayload {
@@ -73,9 +112,11 @@ interface FloorPlanResponse {
   workspaces: WorkspaceResponse[];
 }
 
-function toScenePayload(scene: SceneData): ScenePayload {
+function toFloorPayload({ id, name, scene }: PlanFloor): SceneFloorDto {
   return {
-    version: 2,
+    id,
+    name,
+    fixtures: (scene.fixtures ?? []).map((fixture) => ({ ...fixture })),
     nodes: scene.nodes.map((node) => ({ id: node.id, x: node.x, y: node.y })),
     segments: scene.segments.map((segment) => ({
       id: segment.id,
@@ -83,11 +124,30 @@ function toScenePayload(scene: SceneData): ScenePayload {
       end_node_id: segment.endNodeId,
       thickness: segment.thickness,
     })),
+    openings: (scene.openings ?? []).map((opening) => ({
+      id: opening.id,
+      segment_id: opening.segmentId,
+      kind: opening.kind,
+      offset: opening.offset,
+      width: opening.width,
+      height: opening.height,
+      sill_height: opening.sillHeight,
+      hinge: opening.hinge,
+      swing: opening.swing,
+    })),
+    rooms: (scene.rooms ?? []).map((room) => ({
+      id: room.id,
+      x: room.x,
+      y: room.y,
+      title: room.title,
+      note: room.note,
+    })),
   };
 }
 
-function toWorkspacePayload(workspace: WorkspaceData): WorkspacePayload {
+function toWorkspacePayload(workspace: WorkspaceData, floorId: string): WorkspacePayload {
   return {
+    floor_id: floorId,
     client_id: workspace.id,
     x: workspace.x,
     y: workspace.y,
@@ -99,24 +159,69 @@ function toWorkspacePayload(workspace: WorkspaceData): WorkspacePayload {
   };
 }
 
-function fromFloorPlanResponse(data: FloorPlanResponse): SceneData {
-  const nodes: WallNode[] = data.scene.nodes.map((node) => ({
+function fromFloorPlanResponse(data: FloorPlanResponse): PlanData {
+  // Место без этажа (сохранено до этажей) — на первом.
+  const firstFloorId = data.scene.floors[0]?.id;
+  return {
+    floors: data.scene.floors.map((floor) => ({
+      id: floor.id,
+      name: floor.name,
+      scene: fromFloorDto(
+        floor,
+        data.workspaces.filter((workspace) => (workspace.floor_id ?? firstFloorId) === floor.id),
+      ),
+    })),
+  };
+}
+
+function fromFloorDto(floor: SceneFloorDto, workspaces: WorkspaceResponse[]): SceneData {
+  const nodes: WallNode[] = floor.nodes.map((node) => ({
     id: node.id,
     x: cm(node.x),
     y: cm(node.y),
   }));
-  const segments: WallSegment[] = data.scene.segments.map((segment) => ({
+  const segments: WallSegment[] = floor.segments.map((segment) => ({
     id: segment.id,
     startNodeId: segment.start_node_id,
     endNodeId: segment.end_node_id,
     thickness: cm(segment.thickness),
+  }));
+  const rooms: RoomLabel[] = floor.rooms.map((room) => ({
+    id: room.id,
+    x: cm(room.x),
+    y: cm(room.y),
+    title: room.title,
+    note: room.note,
+  }));
+  const openings: WallOpening[] = floor.openings.map((opening) => ({
+    id: opening.id,
+    segmentId: opening.segment_id,
+    kind: opening.kind,
+    offset: cm(opening.offset),
+    width: cm(opening.width),
+    height: cm(opening.height),
+    sillHeight: cm(opening.sill_height),
+    // У окон сервер может не хранить петли — подставляем, чтобы смена вида на дверь не ломала знак.
+    hinge: opening.hinge ?? 'start',
+    swing: opening.swing ?? 'left',
+  }));
+
+  const fixtures: FixtureData[] = (floor.fixtures ?? []).map((fixture) => ({
+    ...fixture,
+    x: cm(fixture.x),
+    y: cm(fixture.y),
+    width: cm(fixture.width),
+    height: cm(fixture.height),
   }));
 
   return {
     version: 2,
     nodes,
     segments,
-    workspaces: data.workspaces.map(fromWorkspaceResponse),
+    workspaces: workspaces.map(fromWorkspaceResponse),
+    rooms,
+    openings,
+    fixtures,
   };
 }
 
@@ -235,7 +340,7 @@ async function fetchFloorPlan(url: string, init: RequestInit = {}): Promise<Resp
  * сохранение снова создаст новый план вместо обновления существующего.
  */
 export async function saveFloorPlan(
-  scene: SceneData,
+  plan: PlanData,
   existingId: number | null,
   // Имя открытого плана — иначе PUT молча переименовал бы его в «Мой план».
   name: string = DEFAULT_PLAN_NAME,
@@ -245,8 +350,10 @@ export async function saveFloorPlan(
     width_cm: DEFAULT_SCENE_SIZE_CM,
     height_cm: DEFAULT_SCENE_SIZE_CM,
     background_image_url: null,
-    scene: toScenePayload(scene),
-    workspaces: scene.workspaces.map(toWorkspacePayload),
+    scene: { version: 4, floors: plan.floors.map(toFloorPayload) } satisfies ScenePayload,
+    workspaces: plan.floors.flatMap((floor) =>
+      floor.scene.workspaces.map((workspace) => toWorkspacePayload(workspace, floor.id)),
+    ),
   };
 
   const url =
@@ -283,8 +390,8 @@ export async function listFloorPlans(): Promise<FloorPlanListItem[]> {
   return (await response.json()) as FloorPlanListItem[];
 }
 
-/** Загружает план и переводит его в формат SceneData (см. FloorPlanCanvas.loadScene). */
-export async function loadFloorPlan(id: number): Promise<SceneData> {
+/** Загружает план: этажи, у каждого — сцена в формате FloorPlanCanvas (см. showFloor). */
+export async function loadFloorPlan(id: number): Promise<PlanData> {
   const response = await fetchFloorPlan(`${API_BASE_URL}/floor-plans/${id}`);
   if (!response.ok) {
     throw new FloorPlanApiError(await buildHttpErrorMessage(response), response.status);

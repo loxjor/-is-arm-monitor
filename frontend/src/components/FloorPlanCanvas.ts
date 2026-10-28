@@ -2,20 +2,36 @@ import Konva from 'konva';
 import { Workspace } from './Workspace';
 import { DeskSelection } from './DeskSelection';
 import { Wall } from './Wall';
+import { WallMass } from './WallMass';
+import { wallShiftRange, type ShiftRange } from '../utils/wallMove';
+import { RoomEditor } from './RoomEditor';
+import { Opening } from './Opening';
+import { Fixture } from './Fixture';
+import { FIXTURE_DEFAULTS, STAIR_VARIANTS, type FixtureData, type FixtureKind, type StairVariant } from '../types/fixture';
+import { OPENING_DEFAULTS, type WallOpening } from '../types/opening';
+import {
+  clampOpeningOffset,
+  normalizeOpeningOptions,
+  projectPointToSegmentOffset,
+  type OpeningOptions,
+  redistributeOpeningsOnSplit,
+  type OccupiedRange,
+} from '../utils/wallOpening';
 import { WallControls, type WallEnd } from './WallControls';
 import type { WorkspaceData, WorkspaceStatus } from '../types/workspace';
 import type { WallNode, WallSegment } from '../types/wall';
-import type { SceneData, SceneDataV1 } from '../types/scene';
+import type { RoomLabel, SceneData, SceneDataV1 } from '../types/scene';
 import { migrateSceneData } from '../utils/wallGraph';
 import {
   computeNodeFaceVertices,
+  buildNodeHub,
   buildSegmentPolygon,
   type FaceLine,
   type NodeRay,
 } from '../utils/wallPolygon';
 import { generateId } from '../utils/id';
-import { polygonsOverlap, rectCorners, shrinkRect, type Point as DeskPoint } from '../utils/deskCollision';
-import { PIXELS_PER_CM, cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
+import { pointInPolygon, polygonsOverlap, rectCorners, shrinkRect, type Point as DeskPoint } from '../utils/deskCollision';
+import { cm, cmToPx, pxToCm, type Cm } from '../utils/scale';
 import { getWallHatchPattern } from '../utils/hatchPattern';
 import { onThemeChange, palette, withAlpha } from '../theme';
 import { GRID_MAJOR_EVERY, GRID_MINOR_SPACING_PX, getGridTilePattern } from '../utils/grid';
@@ -28,8 +44,16 @@ import {
   rayStartRelation,
 } from '../utils/geometry';
 import { alignmentLines, snapToAlignment, type AlignResult } from '../utils/wallAlign';
-import { findRooms, polygonCentroid } from '../utils/rooms';
-import { pointAtDistance, shiftAxisForOneSidedThickness, type WallSide } from '../utils/wallEdit';
+import { findRooms, polygonCentroid, type Room } from '../utils/rooms';
+import { nextRoomTitles } from '../utils/roomNumbers';
+import {
+  mergeContinuousFaces,
+  pointAtDistance,
+  shiftAxisForOneSidedThickness,
+  type FaceDimension,
+  type KeyedFace,
+  type WallSide,
+} from '../utils/wallEdit';
 import {
   faceForwardGeometry,
   END_SECTOR_LIMIT_DEG,
@@ -47,7 +71,51 @@ import {
 
 // 'view' — только просмотр (учётная часть): объекты не выделяются и не
 // двигаются, работают лишь зум и панорамирование.
-export type CanvasMode = 'select' | 'draw-wall' | 'view' | 'place-desk';
+export type CanvasMode =
+  | 'select'
+  | 'draw-wall'
+  | 'view'
+  | 'place-desk'
+  | 'place-window'
+  | 'place-door'
+  | 'calibrate'
+  | 'move-background'
+  | 'place-stairs'
+  | 'place-elevator';
+
+// Насколько далеко от грани стены (экранные px) курсор ещё "попадает" в
+// стену при расстановке двери/окна — тонкую стену иначе пришлось бы ловить
+// с точностью до пикселя.
+const OPENING_SNAP_SCREEN_PX = 24;
+
+/** Инструменты, которые ставят проёмы в стены. */
+export type OpeningToolMode = 'place-window' | 'place-door';
+
+const isOpeningTool = (mode: CanvasMode): mode is OpeningToolMode => mode === 'place-window' || mode === 'place-door';
+
+const defaultOpeningOptions = (kind: 'window' | 'door'): OpeningOptions => {
+  const { width, height, sillHeight } = OPENING_DEFAULTS[kind];
+  return { kind, width, height, sillHeight };
+};
+
+// Перетаскиваемая стена не укорачивает соседей короче этого — как getMinLength у RemPlanner.
+const WALL_MOVE_MIN_LENGTH_CM = 10;
+// Сдвиг начинается, только когда курсор ушёл дальше этого (экранные px):
+// иначе клик по стене для выделения сдвигал бы её на долю пикселя.
+const WALL_MOVE_THRESHOLD_SCREEN_PX = 2;
+
+// Подложка полупрозрачная — стены поверх неё должны читаться.
+const BACKGROUND_OPACITY = 0.5;
+
+/** Что ставят инструменты «Лестница» и «Лифт». */
+const FIXTURE_KIND_BY_MODE: Partial<Record<CanvasMode, FixtureKind>> = {
+  'place-stairs': 'stairs',
+  'place-elevator': 'elevator',
+};
+// Лестницу и лифт ставим с шагом 5 см — ровнее совмещать со стенами.
+const FIXTURE_SNAP_CM = 5;
+const FIXTURE_MIN_SIZE_CM = 30;
+const FIXTURE_MAX_SIZE_CM = 2000;
 
 /** Размер стола, который ставит инструмент «Рабочее место», см (как DESK в workplace-map). */
 export const DESK_PLACEMENT_SIZE_CM = { width: 120, height: 60 } as const;
@@ -192,6 +260,58 @@ export class FloorPlanCanvas {
   private gridMinorRect: Konva.Rect | null = null;
   private backgroundLayer: Konva.Layer;
   private structureLayer: Konva.Layer;
+  private readonly wallMass = new WallMass();
+  /** Перетаскивание стены (см. startWallMove): пределы, откуда начали, исходные узлы. */
+  private wallMove: {
+    range: ShiftRange;
+    pointer: WallEndpoint;
+    origins: Map<string, { x: Cm; y: Cm }>;
+    snapshotTaken: boolean;
+  } | null = null;
+  // Где нажали на стену: Konva шлёт dragstart, когда курсор уже сдвинулся, —
+  // отсчитывать сдвиг от этой точки значит недотянуть стену за курсором.
+  private wallPressPointer: WallEndpoint | null = null;
+  /**
+   * Групповое выделение — два и больше объектов (стены, столы, проёмы по id).
+   * Пока оно есть, selectedId пуст: панели и ручки одиночного выделения
+   * (длина стены, поворот стола, ширина проёма) к группе не относятся.
+   */
+  private groupSelection = new Set<string>();
+  /** Shift/Ctrl при последнем нажатии — клик добавляет к выделению, а не заменяет его. */
+  private additivePick = false;
+  /** Где нажали мышь последний раз — от этой точки отсчитывается сдвиг группы. */
+  private pressPointer: WallEndpoint | null = null;
+  private groupMove: {
+    pointer: WallEndpoint;
+    nodes: Map<string, { x: Cm; y: Cm }>;
+    desks: Map<string, { x: number; y: number }>;
+    snapshotTaken: boolean;
+  } | null = null;
+  private marquee: { start: WallEndpoint; rect: Konva.Rect; stagePosition: WallEndpoint } | null = null;
+  // Отпускание рамки Konva следом шлёт click по пустому месту — он снял бы
+  // только что сделанное выделение.
+  private suppressStageClick = false;
+  /** Подложка (план-картинка) — ниже заливки помещений. */
+  private readonly backgroundImageGroup = new Konva.Group({ listening: false });
+  private backgroundImage: Konva.Image | null = null;
+  private backgroundOpacity = BACKGROUND_OPACITY;
+  /**
+   * Калибровка подложки: новая картинка (старая подложка спрятана до
+   * «Применить»), отрезок по известному размеру — его концы в координатах сцены.
+   */
+  private calibration: {
+    image: Konva.Image;
+    /** Перекалибровка уже стоящей подложки — отмена её не убирает. */
+    existing: boolean;
+    start: WallEndpoint | null;
+    end: WallEndpoint | null;
+    drawing: boolean;
+    line: Konva.Group;
+  } | null = null;
+  private onCalibrationLine: ((lengthPx: number) => void) | null = null;
+  private readonly roomEditor: RoomEditor;
+  /** Сердцевины узлов из последнего rebuildWallGeometry (см. buildNodeHub), по id узла. */
+  private wallHubs = new Map<string, WallEndpoint[]>();
   private dimensionLayer: Konva.Layer;
   private mainLayer: Konva.Layer;
   private controlsLayer: Konva.Layer;
@@ -217,6 +337,9 @@ export class FloorPlanCanvas {
   private selectedWallThicknessSnapshotTaken = false;
 
   private undoStack: SceneData[] = [];
+  /** Отменённые снимки для «Повторить»; любое новое действие их сбрасывает. */
+  private redoStack: SceneData[] = [];
+  private onHistoryChange: (() => void) | null = null;
   // На время restore() регистрация узлов/сегментов/рабочих мест не должна
   // сама себе класть снимки в стек undo — иначе отмена действия сама стала
   // бы отменяемым действием и стек бы никогда не пустел на "исходное" состояние.
@@ -258,6 +381,12 @@ export class FloorPlanCanvas {
   // Пунктир выравнивания от концов/узлов других стен и заливка замкнутых помещений.
   private alignGuideNodes: (Konva.Line | Konva.Circle)[] = [];
   private roomGroup = new Konva.Group({ listening: false });
+  /** Силуэт другого этажа (обычно нижнего) — только для ориентира, не кликается. */
+  private readonly underlayGroup = new Konva.Group({ listening: false, opacity: 0.35 });
+  private underlay: SceneData | null = null;
+  private roomLabels = new Map<string, RoomLabel>();
+  /** Помещения из последнего renderRooms — по ним двойной клик ищет, какое переименовать. */
+  private rooms: Room[] = [];
   // Мировые углы линий-направляющих текущей протяжки: четыре мировые оси
   // для свободного старта, нормаль и ±45° — для старта от грани.
   private guideAnglesDeg: number[] = GUIDE_LINE_ANGLES_DEG;
@@ -269,6 +398,20 @@ export class FloorPlanCanvas {
   private deskGhost: Konva.Rect | null = null;
   private deskGhostRotation = 0;
   private onDeskPlace: ((topLeftCm: { x: Cm; y: Cm }, rotation: number) => void) | null = null;
+  /** Двери и окна — над стенами, но под размерами и столами. */
+  private readonly openingLayer = new Konva.Layer();
+  private openings = new Map<string, Opening>();
+  private openingGhost: Opening | null = null;
+  private fixtures = new Map<string, Fixture>();
+  private fixtureGhost: Fixture | null = null;
+  private fixtureGhostRotation = 0;
+  /** Какой вид лестницы ставит инструмент «Лестница» (выбирается в его меню). */
+  private stairVariant: StairVariant = 'straight';
+  /** Что ставят инструменты «Окно» и «Дверь» — меняется в панели настроек инструмента. */
+  private openingTools: Record<OpeningToolMode, OpeningOptions> = {
+    'place-window': defaultOpeningOptions('window'),
+    'place-door': defaultOpeningOptions('door'),
+  };
 
   constructor(containerId: string, width: number, height: number) {
     this.stage = new Konva.Stage({
@@ -280,6 +423,7 @@ export class FloorPlanCanvas {
     this.gridLayer = new Konva.Layer({ listening: false });
     this.backgroundLayer = new Konva.Layer({ listening: false });
     this.structureLayer = new Konva.Layer();
+    this.structureLayer.add(this.wallMass.shape);
     this.dimensionLayer = new Konva.Layer({ listening: false });
     this.mainLayer = new Konva.Layer();
     this.controlsLayer = new Konva.Layer();
@@ -299,19 +443,27 @@ export class FloorPlanCanvas {
     });
     this.controlsLayer.add(this.deskSelection.group);
 
+    this.backgroundLayer.add(this.backgroundImageGroup);
     this.backgroundLayer.add(this.roomGroup);
+    this.backgroundLayer.add(this.underlayGroup);
     this.stage.add(this.gridLayer);
     this.stage.add(this.backgroundLayer);
     this.stage.add(this.structureLayer);
+    this.stage.add(this.openingLayer);
     this.stage.add(this.dimensionLayer);
     this.stage.add(this.mainLayer);
     this.stage.add(this.controlsLayer);
 
     this.drawGrid();
+    this.roomEditor = new RoomEditor(this.stage.container());
 
     this.stage.on('click tap', (event) => {
       // Konva шлёт click при отпускании ручки поворота над пустой сценой — раньше,
       // чем поворот завершится (window mouseup), и выделение не должно слететь.
+      if (this.suppressStageClick) {
+        this.suppressStageClick = false;
+        return;
+      }
       if (event.target === this.stage && !this.deskSelection.isRotating) {
         this.deselect();
       }
@@ -319,6 +471,27 @@ export class FloorPlanCanvas {
 
     this.stage.on('mousedown touchstart', (event) => this.handleWallDrawStart(event));
     this.stage.on('mousemove touchmove', (event) => this.handleWallDrawMove(event));
+    this.stage.on('mousedown touchstart', (event) => {
+      const evt = event.evt;
+      this.additivePick = evt.shiftKey || evt.ctrlKey || evt.metaKey;
+      this.pressPointer = this.stage.getRelativePointerPosition();
+      // Shift + протяжка по пустому месту — рамка выделения вместо сдвига плана.
+      if (this.mode === 'select' && this.additivePick && event.target === this.stage) {
+        if (!(evt instanceof MouseEvent) || evt.button === 0) this.startMarquee();
+      }
+    });
+    // Konva начинает сдвиг плана раньше, чем срабатывает наш mousedown, —
+    // пока рисуется рамка, план просто удерживается на месте.
+    this.stage.on('dragmove dragend', (event) => {
+      if (this.marquee && event.target === this.stage) this.stage.position(this.marquee.stagePosition);
+    });
+    this.stage.on('mousemove touchmove', () => this.updateMarquee());
+    window.addEventListener('mouseup', this.handleMarqueeEnd);
+    this.stage.on('mousedown touchstart', (event) => this.startCalibrationLine(event));
+    this.stage.on('mousemove touchmove', (event) => this.updateCalibrationLine(event));
+    window.addEventListener('mouseup', this.handleCalibrationLineEnd);
+    window.addEventListener('touchend', this.handleCalibrationLineEnd);
+    window.addEventListener('touchend', this.handleMarqueeEnd);
     this.stage.on('wheel', (event) => this.handleWheelZoom(event));
     this.stage.on('mousemove touchmove', () => {
       if (this.mode !== 'place-desk') return;
@@ -326,7 +499,20 @@ export class FloorPlanCanvas {
       if (pointer) this.updateDeskGhost(pointer);
     });
     this.stage.on('click tap', (event) => this.handleDeskPlaceClick(event));
-    this.stage.container().addEventListener('mouseleave', () => this.hideDeskGhost());
+    this.stage.on('mousemove touchmove', () => this.updateOpeningGhost());
+    this.stage.on('click tap', (event) => this.handleOpeningPlaceClick(event));
+    this.stage.on('mousemove touchmove', () => this.updateFixtureGhost());
+    this.stage.on('click tap', (event) => this.handleFixturePlaceClick(event));
+    this.stage.on('dblclick dbltap', (event) => {
+      if (this.mode === 'select' && event.target === this.stage) {
+        this.editRoomAtPointer();
+      }
+    });
+    this.stage.container().addEventListener('mouseleave', () => {
+      this.hideDeskGhost();
+      this.hideOpeningGhost();
+      this.hideFixtureGhost();
+    });
 
     // На window, а не на stage: если увести курсор за пределы холста и
     // отпустить кнопку там, Konva-события на stage не долетают вовсе, и
@@ -409,19 +595,25 @@ export class FloorPlanCanvas {
   /** Зум колесом мыши с сохранением точки сцены под курсором на месте. */
   private handleWheelZoom(event: Konva.KonvaEventObject<WheelEvent>): void {
     event.evt.preventDefault();
-
-    const oldScale = this.stage.scaleX();
     const pointer = this.stage.getPointerPosition();
-    if (!pointer) {
-      return;
+    if (pointer) {
+      this.zoomAt(pointer, event.evt.deltaY > 0 ? -1 : 1);
     }
+  }
 
+  /** Кнопки «+»/«−»: шаг масштаба как у колеса, относительно центра холста. */
+  zoomBy(direction: 1 | -1): void {
+    this.zoomAt({ x: this.stage.width() / 2, y: this.stage.height() / 2 }, direction);
+  }
+
+  /** Масштаб на шаг ZOOM_STEP так, чтобы точка экрана pointer осталась на месте. */
+  private zoomAt(pointer: { x: number; y: number }, direction: 1 | -1): void {
+    const oldScale = this.stage.scaleX();
     const pointTo = {
       x: (pointer.x - this.stage.x()) / oldScale,
       y: (pointer.y - this.stage.y()) / oldScale,
     };
 
-    const direction = event.evt.deltaY > 0 ? -1 : 1;
     const rawScale = direction > 0 ? oldScale * ZOOM_STEP : oldScale / ZOOM_STEP;
     const newScale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, rawScale));
 
@@ -599,6 +791,18 @@ export class FloorPlanCanvas {
     // structureLayer) от listening(false) не зависит — это два разных канваса.
     this.structureLayer.listening(mode === 'select');
     this.mainLayer.listening(mode === 'select');
+    this.openingLayer.listening(mode === 'select');
+    this.openings.forEach((opening) => opening.group.draggable(mode === 'select'));
+    this.fixtures.forEach((fixture) => fixture.setDraggable(mode === 'select'));
+    this.openingLayer.batchDraw();
+
+    // Подложку двигают только в своём режиме — иначе она ловила бы клики
+    // мимо стен и столов и уезжала вместе со сдвигом плана.
+    const movingBackground = mode === 'move-background';
+    this.backgroundLayer.listening(movingBackground);
+    this.backgroundImageGroup.listening(movingBackground);
+    this.backgroundImage?.setAttrs({ listening: movingBackground, draggable: movingBackground });
+    this.backgroundLayer.batchDraw();
 
     // Konva закрашивает hit-canvas (то, по чему бьёт getIntersection при
     // клике) только внутри реального draw()/batchDraw(), с состоянием
@@ -617,10 +821,25 @@ export class FloorPlanCanvas {
     // с собственной draggable=true (тот перетащится сам, а не сцена).
     this.stage.draggable(mode === 'select' || mode === 'view');
 
-    this.stage.container().style.cursor = mode === 'draw-wall' || mode === 'place-desk' ? 'crosshair' : 'default';
+    this.stage.container().style.cursor =
+      mode === 'move-background'
+        ? 'move'
+        : mode === 'draw-wall' ||
+            mode === 'place-desk' ||
+            mode === 'calibrate' ||
+            isOpeningTool(mode) ||
+            FIXTURE_KIND_BY_MODE[mode]
+          ? 'crosshair'
+          : 'default';
 
     if (mode !== 'place-desk') {
       this.hideDeskGhost();
+    }
+    if (!isOpeningTool(mode)) {
+      this.hideOpeningGhost();
+    }
+    if (!FIXTURE_KIND_BY_MODE[mode]) {
+      this.hideFixtureGhost();
     }
 
     if (mode !== 'draw-wall') {
@@ -763,42 +982,251 @@ export class FloorPlanCanvas {
   destroy(): void {
     window.removeEventListener('mouseup', this.handleWindowPointerUp);
     window.removeEventListener('touchend', this.handleWindowPointerUp);
+    window.removeEventListener('mouseup', this.handleMarqueeEnd);
+    window.removeEventListener('touchend', this.handleMarqueeEnd);
+    window.removeEventListener('mouseup', this.handleCalibrationLineEnd);
+    window.removeEventListener('touchend', this.handleCalibrationLineEnd);
     window.removeEventListener('mousemove', this.handlePanMove);
     window.removeEventListener('mouseup', this.handlePanEnd);
     this.resizeObserver.disconnect();
     this.unsubscribeTheme();
+    this.roomEditor.destroy();
     this.stage.destroy();
   }
 
-  loadBackgroundPlan(imageUrl: string): void {
+  /**
+   * Начало калибровки подложки: картинка встаёт в натуральную величину
+   * (пиксель картинки = пиксель сцены) по центру видимой части, прежняя
+   * подложка прячется до «Применить». Дальше пользователь в режиме
+   * 'calibrate' проводит отрезок по известному размеру (onCalibrationLine)
+   * и вводит его длину — applyBackgroundCalibration.
+   */
+  calibrateBackground(imageUrl: string): void {
     const image = new Image();
-    image.src = imageUrl;
     image.onload = () => {
-      this.backgroundLayer.destroyChildren();
-      const backgroundImage = new Konva.Image({
+      this.cancelBackgroundCalibration();
+      const scale = this.stage.scaleX();
+      const center = {
+        x: (this.stage.width() / 2 - this.stage.x()) / scale,
+        y: (this.stage.height() / 2 - this.stage.y()) / scale,
+      };
+      const node = new Konva.Image({
         image,
-        width: this.stage.width(),
-        height: this.stage.height(),
+        x: center.x - image.width / 2,
+        y: center.y - image.height / 2,
+        width: image.width,
+        height: image.height,
+        opacity: this.backgroundOpacity,
       });
-      this.backgroundLayer.add(backgroundImage);
+      this.backgroundImage?.visible(false);
+      this.backgroundImageGroup.add(node);
+      const line = new Konva.Group({ listening: false });
+      this.controlsLayer.add(line);
+      this.calibration = { image: node, existing: false, start: null, end: null, drawing: false, line };
       this.backgroundLayer.batchDraw();
     };
+    image.src = imageUrl;
+  }
+
+  /** Калибровка уже стоящей подложки — то же, что после загрузки, но без новой картинки. */
+  recalibrateBackground(): boolean {
+    const image = this.backgroundImage;
+    if (!image) return false;
+    this.cancelBackgroundCalibration();
+    image.visible(true);
+    const line = new Konva.Group({ listening: false });
+    this.controlsLayer.add(line);
+    this.calibration = { image, existing: true, start: null, end: null, drawing: false, line };
+    this.backgroundLayer.batchDraw();
+    return true;
+  }
+
+  hasBackground(): boolean {
+    return this.backgroundImage !== null;
+  }
+
+  isBackgroundVisible(): boolean {
+    return this.backgroundImage?.visible() ?? false;
+  }
+
+  setBackgroundVisible(visible: boolean): void {
+    this.backgroundImage?.visible(visible);
+    this.backgroundLayer.batchDraw();
+  }
+
+  getBackgroundOpacity(): number {
+    return this.backgroundOpacity;
+  }
+
+  setBackgroundOpacity(opacity: number): void {
+    this.backgroundOpacity = Math.min(1, Math.max(0.1, opacity));
+    this.backgroundImage?.opacity(this.backgroundOpacity);
+    this.calibration?.image.opacity(this.backgroundOpacity);
+    this.backgroundLayer.batchDraw();
+  }
+
+  removeBackground(): void {
+    this.cancelBackgroundCalibration();
+    this.backgroundImage?.destroy();
+    this.backgroundImage = null;
+    if (this.mode === 'move-background') this.setMode('select');
+    this.backgroundLayer.batchDraw();
+  }
+
+  /** Отрезок калибровки дорисован — его длина в px сцены (см. calibrateBackground). */
+  setOnCalibrationLine(callback: (lengthPx: number) => void): void {
+    this.onCalibrationLine = callback;
+  }
+
+  isCalibrating(): boolean {
+    return this.calibration !== null;
+  }
+
+  /** Стереть отрезок и провести заново. */
+  redrawCalibrationLine(): void {
+    if (!this.calibration) return;
+    this.calibration.start = null;
+    this.calibration.end = null;
+    this.calibration.line.destroyChildren();
+    this.controlsLayer.batchDraw();
+  }
+
+  /**
+   * Масштабирует подложку так, чтобы отрезок стал lengthCm, относительно
+   * его начала — та точка картинки, с которой начали мерить, остаётся на
+   * месте. Новая подложка заменяет прежнюю.
+   */
+  applyBackgroundCalibration(lengthCm: number): boolean {
+    const calibration = this.calibration;
+    const { start, end } = calibration ?? {};
+    if (!calibration || !start || !end || !(lengthCm > 0)) return false;
+    const measured = Math.hypot(end.x - start.x, end.y - start.y);
+    if (measured === 0) return false;
+    const factor = cmToPx(lengthCm) / measured;
+    const { image } = calibration;
+    image.setAttrs({
+      x: start.x + (image.x() - start.x) * factor,
+      y: start.y + (image.y() - start.y) * factor,
+      scaleX: image.scaleX() * factor,
+      scaleY: image.scaleY() * factor,
+    });
+    if (!calibration.existing) {
+      this.backgroundImage?.destroy();
+      this.backgroundImage = image;
+    }
+    calibration.line.destroy();
+    this.calibration = null;
+    this.backgroundLayer.batchDraw();
+    this.controlsLayer.batchDraw();
+    return true;
+  }
+
+  /** Отказ от калибровки: новая картинка убирается, прежняя подложка возвращается. */
+  cancelBackgroundCalibration(): void {
+    const calibration = this.calibration;
+    if (!calibration) return;
+    if (!calibration.existing) calibration.image.destroy();
+    calibration.line.destroy();
+    this.calibration = null;
+    this.backgroundImage?.visible(true);
+    this.backgroundLayer.batchDraw();
+    this.controlsLayer.batchDraw();
+  }
+
+  private startCalibrationLine(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
+    const calibration = this.calibration;
+    if (this.mode !== 'calibrate' || !calibration) return;
+    if (event.evt instanceof MouseEvent && event.evt.button !== 0) return;
+    const pointer = this.stage.getRelativePointerPosition();
+    if (!pointer) return;
+    calibration.start = pointer;
+    calibration.end = pointer;
+    calibration.drawing = true;
+    this.renderCalibrationLine();
+  }
+
+  private updateCalibrationLine(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
+    const calibration = this.calibration;
+    const pointer = this.stage.getRelativePointerPosition();
+    if (!calibration?.drawing || !calibration.start || !pointer) return;
+    calibration.end = event.evt.shiftKey ? this.axisLocked(calibration.start, pointer) : pointer;
+    this.renderCalibrationLine();
+  }
+
+  private readonly handleCalibrationLineEnd = (): void => {
+    const calibration = this.calibration;
+    if (!calibration?.drawing) return;
+    calibration.drawing = false;
+    const { start, end } = calibration;
+    const length = start && end ? Math.hypot(end.x - start.x, end.y - start.y) : 0;
+    // Случайный клик без протяжки — не отрезок.
+    if (length * this.stage.scaleX() < 4) {
+      this.redrawCalibrationLine();
+      return;
+    }
+    this.onCalibrationLine?.(length);
+  };
+
+  /** Shift: отрезок строго по горизонтали или вертикали — по большей из проекций. */
+  private axisLocked(start: WallEndpoint, point: WallEndpoint): WallEndpoint {
+    return Math.abs(point.x - start.x) >= Math.abs(point.y - start.y)
+      ? { x: point.x, y: start.y }
+      : { x: start.x, y: point.y };
+  }
+
+  /** Отрезок калибровки: линия accent с кружками на концах, толщина не зависит от зума. */
+  private renderCalibrationLine(): void {
+    const calibration = this.calibration;
+    if (!calibration?.start || !calibration.end) return;
+    const { start, end, line } = calibration;
+    const p = palette();
+    const tick = 6 / this.stage.scaleX();
+    line.destroyChildren();
+    line.add(
+      new Konva.Line({
+        points: [start.x, start.y, end.x, end.y],
+        stroke: p.accent,
+        strokeWidth: 2,
+        strokeScaleEnabled: false,
+      }),
+      ...[start, end].map(
+        (point) =>
+          new Konva.Circle({
+            x: point.x,
+            y: point.y,
+            radius: tick / 2,
+            fill: p.surface,
+            stroke: p.accent,
+            strokeWidth: 2,
+            strokeScaleEnabled: false,
+          }),
+      ),
+    );
+    this.controlsLayer.batchDraw();
   }
 
   addWorkspace(data: WorkspaceData): Workspace {
     this.pushUndoSnapshot();
 
-    const workspace = new Workspace(data, (selected) => this.selectWorkspace(selected));
+    const workspace = new Workspace(data, (selected) => this.pick(selected.id, () => this.selectWorkspace(selected)));
     workspace.setDraggable(this.mode === 'select');
     // Как в CursorTool workplace-map: стол «упирается» в стену или соседа и
     // остаётся на последней свободной позиции, а не отскакивает после отпускания.
     let lastValid = workspace.group.position();
     workspace.group.on('dragstart', () => {
+      if (this.groupSelection.has(workspace.id)) {
+        this.startGroupMove();
+        return;
+      }
       this.pushUndoSnapshot();
       lastValid = workspace.group.position();
       if (this.deskSelection.selected !== workspace) this.selectWorkspace(workspace);
     });
     workspace.group.on('dragmove', () => {
+      if (this.groupMove) {
+        this.continueGroupMove();
+        return;
+      }
       const target = workspace.group.position();
       // Идём от последней свободной точки к курсору мелкими шагами: при резком
       // рывке мыши иначе стол перепрыгнул бы тонкую стену за один dragmove.
@@ -816,6 +1244,9 @@ export class FloorPlanCanvas {
       }
       lastValid = workspace.group.position();
       this.deskSelection.update();
+    });
+    workspace.group.on('dragend', () => {
+      if (this.groupMove) this.finishGroupMove();
     });
     this.mainLayer.add(workspace.group);
     this.workspaces.set(data.id, workspace);
@@ -889,16 +1320,30 @@ export class FloorPlanCanvas {
    * см. registerWallNode.
    */
   private registerWallSegment(segment: WallSegment): Wall {
-    const wall = new Wall(segment, (selected) => this.selectWall(selected));
+    const wall = new Wall(segment, (selected) => this.pick(selected.id, () => this.selectWall(selected)));
     wall.setDraggable(this.mode === 'select');
-    wall.line.on('dragstart transformstart', () => {
-      this.pushUndoSnapshot();
-      // Ручки и кнопки стоят по старым координатам узлов, пока тело стены
-      // едет — вернутся на место в rebuildWallGeometry после dragend.
-      this.wallControls.hide();
-      this.controlsLayer.batchDraw();
+    wall.line.on('mousedown touchstart', () => {
+      this.wallPressPointer = this.stage.getRelativePointerPosition();
     });
-    wall.line.on('dragend', () => this.handleWallDragEnd(wall));
+    wall.line.on('dragstart', () =>
+      this.groupSelection.has(wall.id) ? this.startGroupMove() : this.startWallMove(wall),
+    );
+    wall.line.on('dragmove', () => {
+      if (!this.groupMove) {
+        this.continueWallMove(wall);
+        return;
+      }
+      wall.line.position({ x: 0, y: 0 });
+      this.continueGroupMove();
+    });
+    wall.line.on('dragend', () => {
+      if (!this.groupMove) {
+        this.finishWallMove(wall);
+        return;
+      }
+      wall.line.position({ x: 0, y: 0 });
+      this.finishGroupMove();
+    });
     this.structureLayer.add(wall.line);
     this.dimensionLayer.add(wall.dimensionGroup);
     this.walls.set(segment.id, wall);
@@ -948,6 +1393,7 @@ export class FloorPlanCanvas {
     });
 
     const faceByRayKey = new Map<string, { left: WallEndpoint; right: WallEndpoint }>();
+    this.wallHubs.clear();
     raysByNode.forEach((rays, nodeId) => {
       const node = this.nodes.get(nodeId);
       if (!node) {
@@ -955,7 +1401,12 @@ export class FloorPlanCanvas {
       }
       const nodePx = { x: cmToPx(node.x), y: cmToPx(node.y) };
       const abutment = rays.length === 1 ? this.findAbutmentFacePx(nodeId, nodePx) : undefined;
-      computeNodeFaceVertices(nodePx, rays, abutment).forEach((face, key) => faceByRayKey.set(key, face));
+      const faces = computeNodeFaceVertices(nodePx, rays, abutment);
+      faces.forEach((face, key) => faceByRayKey.set(key, face));
+      const hub = buildNodeHub(rays, faces);
+      if (hub.length > 0) {
+        this.wallHubs.set(nodeId, hub);
+      }
     });
 
     this.walls.forEach((wall) => {
@@ -971,8 +1422,18 @@ export class FloorPlanCanvas {
       );
     });
 
-    this.structureLayer.batchDraw();
+    this.refreshWallMass();
+    this.syncOpenings();
+    this.renderOpenings();
     this.renderWallOverlays();
+  }
+
+  private refreshWallMass(): void {
+    const polygons: (readonly WallEndpoint[])[] = [];
+    this.walls.forEach((wall) => polygons.push(wall.getPolygon()));
+    this.wallHubs.forEach((hub) => polygons.push(hub));
+    this.wallMass.setPolygons(polygons);
+    this.structureLayer.batchDraw();
   }
 
   /**
@@ -1017,7 +1478,11 @@ export class FloorPlanCanvas {
     this.gridLayer.destroyChildren();
     this.drawGrid();
     this.gridMinorRect?.visible(this.stage.scaleX() > GRID_MINOR_VISIBLE_ABOVE_SCALE);
+    this.wallMass.applyTheme();
+    this.renderUnderlay();
     this.walls.forEach((wall) => wall.applyTheme());
+    this.renderOpenings();
+    this.fixtures.forEach((fixture) => fixture.render());
     this.workspaces.forEach((workspace) => workspace.applyTheme());
     this.wallControls.applyTheme();
     this.deskSelection.update();
@@ -1029,7 +1494,17 @@ export class FloorPlanCanvas {
 
   private renderWallOverlays(): void {
     const scale = this.stage.scaleX();
-    this.walls.forEach((wall) => wall.renderDimensions(scale));
+    const faces: KeyedFace[] = [];
+    this.walls.forEach((wall) => {
+      wall.getFaceDimensions().forEach((face) => faces.push({ key: `${wall.id}:${face.side}`, face }));
+    });
+    // Непрерывная грань меряется целиком — размер рисует первая из её стен.
+    const runByOwnerKey = new Map<string, FaceDimension>();
+    mergeContinuousFaces(faces).forEach((run) => runByOwnerKey.set(run.keys[0], run.face));
+    this.walls.forEach((wall) => {
+      const sides: WallSide[] = ['left', 'right'];
+      wall.renderDimensions(sides.map((side) => runByOwnerKey.get(`${wall.id}:${side}`) ?? null), scale);
+    });
     this.renderRooms(scale);
     this.dimensionLayer.batchDraw();
     this.updateWallControls();
@@ -1304,37 +1779,69 @@ export class FloorPlanCanvas {
   }
 
   /**
-   * Перетаскивание тела стены двигает ОБА её узла на одну и ту же дельту —
-   * и, следовательно, автоматически тянет за собой любую другую стену,
-   * которая делит с этой один из узлов (угол остаётся сомкнутым без
-   * отдельного пересчёта стыков, только полный пересчёт геометрии). Дельта
-   * — это то, куда Konva уже сдвинул сам Line при перетаскивании: точки
-   * полигона (points) при drag не меняются, меняются только x/y самой
-   * фигуры, так что после жеста x/y и есть дельта в px, а не отдельная
-   * позиция, которую пришлось бы сравнивать с координатами узла.
+   * Перетаскивание построенной стены — как в RemPlanner: стена (вместе с
+   * соосными участками, на которые её разбили T-стыки) едет только
+   * параллельно себе, вдоль нормали, и тянет за собой соседей вживую — узлы
+   * общие, стыки пересчитываются на каждом движении. Пределы (не схлопнуть
+   * соседа, не съехать с грани у T-стыка, не пройти сквозь параллельную
+   * стену) считаются один раз в начале — см. wallShiftRange. Сама line
+   * Konva на месте не стоит, поэтому её сдвиг сбрасывается каждый dragmove.
    */
-  private handleWallDragEnd(wall: Wall): void {
-    const deltaPxX = wall.line.x();
-    const deltaPxY = wall.line.y();
-    if (deltaPxX === 0 && deltaPxY === 0) {
+  private startWallMove(wall: Wall): void {
+    const nodesPx = new Map(
+      [...this.nodes.values()].map((node) => [node.id, { id: node.id, x: cmToPx(node.x), y: cmToPx(node.y) }]),
+    );
+    const wallsPx = [...this.walls.values()].map((w) => ({
+      id: w.id,
+      startNodeId: w.startNodeId,
+      endNodeId: w.endNodeId,
+      thickness: cmToPx(w.thicknessCm),
+    }));
+    const range = wallShiftRange(nodesPx, wallsPx, wall.id, cmToPx(WALL_MOVE_MIN_LENGTH_CM));
+    const pointer = this.wallPressPointer ?? this.stage.getRelativePointerPosition();
+    if (!range || !pointer) {
+      this.wallMove = null;
       return;
     }
+    const origins = new Map<string, { x: Cm; y: Cm }>();
+    range.nodeIds.forEach((id) => {
+      const node = this.nodes.get(id);
+      if (node) origins.set(id, { x: node.x, y: node.y });
+    });
+    this.wallMove = { range, pointer, origins, snapshotTaken: false };
+  }
+
+  private continueWallMove(wall: Wall): void {
     wall.line.position({ x: 0, y: 0 });
+    const move = this.wallMove;
+    const pointer = this.stage.getRelativePointerPosition();
+    if (!move || !pointer) return;
 
-    const startNode = this.nodes.get(wall.startNodeId);
-    const endNode = this.nodes.get(wall.endNodeId);
-    if (!startNode || !endNode) {
-      return;
+    const dx = pointer.x - move.pointer.x;
+    const dy = pointer.y - move.pointer.y;
+    const { normal, min, max } = move.range;
+    const started = Math.hypot(dx, dy) * this.stage.scaleX() >= WALL_MOVE_THRESHOLD_SCREEN_PX;
+    const shift = started ? Math.min(max, Math.max(min, dx * normal.x + dy * normal.y)) : 0;
+    if (shift !== 0 && !move.snapshotTaken) {
+      // Снимок — до первого реального сдвига: просто клик по стене в историю не попадает.
+      this.pushUndoSnapshot();
+      move.snapshotTaken = true;
     }
-
-    const deltaXCm = pxToCm(deltaPxX);
-    const deltaYCm = pxToCm(deltaPxY);
-    startNode.x = cm(startNode.x + deltaXCm);
-    startNode.y = cm(startNode.y + deltaYCm);
-    endNode.x = cm(endNode.x + deltaXCm);
-    endNode.y = cm(endNode.y + deltaYCm);
-
+    move.origins.forEach((origin, id) => {
+      const node = this.nodes.get(id);
+      if (!node) return;
+      node.x = cm(origin.x + pxToCm(normal.x * shift));
+      node.y = cm(origin.y + pxToCm(normal.y * shift));
+    });
     this.rebuildWallGeometry();
+  }
+
+  private finishWallMove(wall: Wall): void {
+    wall.line.position({ x: 0, y: 0 });
+    this.wallMove = null;
+    this.wallPressPointer = null;
+    this.rebuildWallGeometry();
+    this.emitSelectionChange();
   }
 
   /**
@@ -1465,18 +1972,32 @@ export class FloorPlanCanvas {
     wall.destroy();
     this.walls.delete(wallId);
 
-    this.registerWallSegment({
+    const first = this.registerWallSegment({
       id: generateId('wall'),
       startNodeId,
       endNodeId: newNodeId,
       thickness: thicknessCm,
     });
-    this.registerWallSegment({
+    const second = this.registerWallSegment({
       id: generateId('wall'),
       startNodeId: newNodeId,
       endNodeId,
       thickness: thicknessCm,
     });
+
+    // Проёмы разбитой стены уходят в ту половину, где их центр.
+    const startPx = this.nodePointPx(startNodeId);
+    const splitCm = pxToCm(Math.hypot(axisPointPx.x - startPx.x, axisPointPx.y - startPx.y));
+    this.replaceOpenings(
+      redistributeOpeningsOnSplit(
+        Array.from(this.openings.values()).map((opening) => opening.data),
+        wallId,
+        splitCm,
+        first.id,
+        second.id,
+        splitCm,
+      ),
+    );
 
     return newNodeId;
   }
@@ -2030,10 +2551,19 @@ export class FloorPlanCanvas {
   private clearWallSelectionHighlight(): void {
     if (this.selectedId) {
       this.walls.get(this.selectedId)?.setSelected(false);
+      const opening = this.openings.get(this.selectedId);
+      if (opening) {
+        opening.setSelected(false);
+        this.renderOpening(opening);
+        this.openingLayer.batchDraw();
+      }
+      this.fixtures.get(this.selectedId)?.setSelected(false);
     }
   }
 
   private deselect(): void {
+    this.highlightGroup(false);
+    this.groupSelection.clear();
     this.clearWallSelectionHighlight();
     this.selectedId = null;
     this.selectedWallThicknessSnapshotTaken = false;
@@ -2044,19 +2574,416 @@ export class FloorPlanCanvas {
     this.emitSelectionChange();
   }
 
+  // ─── Лестницы и лифты ───────────────────────────────────────
+
+  private registerFixture(data: FixtureData): Fixture {
+    const fixture = new Fixture(data, {
+      onSelect: (selected) => this.pick(selected.id, () => this.selectFixture(selected)),
+    });
+    fixture.setDraggable(this.mode === 'select');
+    fixture.group.on('dragstart', () => {
+      if (this.groupSelection.has(fixture.id)) {
+        this.startGroupMove();
+        return;
+      }
+      this.pushUndoSnapshot();
+      this.selectFixture(fixture);
+    });
+    fixture.group.on('dragmove', () => {
+      if (this.groupMove) this.continueGroupMove();
+    });
+    fixture.group.on('dragend', () => {
+      if (this.groupMove) {
+        this.finishGroupMove();
+        return;
+      }
+      fixture.data = fixture.toData();
+    });
+    this.mainLayer.add(fixture.group);
+    this.fixtures.set(fixture.id, fixture);
+    return fixture;
+  }
+
+  private selectFixture(fixture: Fixture): void {
+    if (this.mode !== 'select') return;
+    this.clearWallSelectionHighlight();
+    this.selectedId = fixture.id;
+    this.selectedWallThicknessSnapshotTaken = false;
+    this.deskSelection.detach();
+    fixture.setSelected(true);
+    this.mainLayer.batchDraw();
+    this.structureLayer.batchDraw();
+    this.updateWallControls();
+    this.emitSelectionChange();
+  }
+
+  /** Выделенная лестница или лифт (копия данных) — для панели настроек. */
+  getSelectedFixture(): FixtureData | null {
+    const fixture = this.selectedId ? this.fixtures.get(this.selectedId) : undefined;
+    return fixture ? fixture.toData() : null;
+  }
+
+  /** Размер и поворот выделенной лестницы/лифта; размеры — в пределах FIXTURE_MIN/MAX_SIZE_CM. */
+  updateSelectedFixture(patch: {
+    width?: number;
+    height?: number;
+    rotation?: number;
+    variant?: StairVariant;
+  }): FixtureData | null {
+    const fixture = this.selectedId ? this.fixtures.get(this.selectedId) : undefined;
+    if (!fixture) return null;
+    const clampSize = (value: number | undefined, current: Cm): Cm =>
+      value === undefined || !Number.isFinite(value)
+        ? current
+        : cm(Math.round(Math.min(FIXTURE_MAX_SIZE_CM, Math.max(FIXTURE_MIN_SIZE_CM, value))));
+    const current = fixture.toData();
+    // Другой вид лестницы — со своим типовым габаритом: у винтовой и у марша он разный.
+    if (patch.variant && current.kind === 'stairs' && patch.variant !== (current.variant ?? 'straight')) {
+      const size = STAIR_VARIANTS[patch.variant];
+      this.pushUndoSnapshot();
+      fixture.update({ ...current, variant: patch.variant, width: size.width, height: size.height });
+      this.mainLayer.batchDraw();
+      return fixture.toData();
+    }
+    const next: FixtureData = {
+      ...current,
+      width: clampSize(patch.width, current.width),
+      height: clampSize(patch.height, current.height),
+      rotation: patch.rotation === undefined ? current.rotation : ((patch.rotation % 360) + 360) % 360,
+    };
+    if (next.width !== current.width || next.height !== current.height || next.rotation !== current.rotation) {
+      this.pushUndoSnapshot();
+      fixture.update(next);
+      this.mainLayer.batchDraw();
+    }
+    return fixture.toData();
+  }
+
+  setStairVariant(variant: StairVariant): void {
+    this.stairVariant = variant;
+    this.updateFixtureGhost();
+  }
+
+  /** R в режиме расстановки — повернуть будущую лестницу/лифт на 90°. */
+  rotateFixtureGhost(): void {
+    this.fixtureGhostRotation = (this.fixtureGhostRotation + 90) % 360;
+    this.updateFixtureGhost();
+  }
+
+  private fixtureAtPointer(kind: FixtureKind): FixtureData | null {
+    const pointer = this.stage.getRelativePointerPosition();
+    if (!pointer) return null;
+    const snap = (px: number): Cm => cm(Math.round(pxToCm(px) / FIXTURE_SNAP_CM) * FIXTURE_SNAP_CM);
+    const stairs = kind === 'stairs';
+    const size = stairs ? STAIR_VARIANTS[this.stairVariant] : FIXTURE_DEFAULTS[kind];
+    return {
+      id: generateId(kind),
+      kind,
+      ...(stairs ? { variant: this.stairVariant } : {}),
+      x: snap(pointer.x),
+      y: snap(pointer.y),
+      width: size.width,
+      height: size.height,
+      rotation: this.fixtureGhostRotation,
+    };
+  }
+
+  private updateFixtureGhost(): void {
+    const kind = FIXTURE_KIND_BY_MODE[this.mode];
+    const data = kind ? this.fixtureAtPointer(kind) : null;
+    if (!data) return;
+    if (!this.fixtureGhost || this.fixtureGhost.data.kind !== data.kind || this.fixtureGhost.data.variant !== data.variant) {
+      this.fixtureGhost?.group.destroy();
+      this.fixtureGhost = new Fixture(data, { ghost: true });
+      this.mainLayer.add(this.fixtureGhost.group);
+    }
+    this.fixtureGhost.update(data);
+    this.fixtureGhost.group.visible(true);
+    this.mainLayer.batchDraw();
+  }
+
+  private hideFixtureGhost(): void {
+    if (this.fixtureGhost?.group.visible()) {
+      this.fixtureGhost.group.visible(false);
+      this.mainLayer.batchDraw();
+    }
+  }
+
+  private handleFixturePlaceClick(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
+    const kind = FIXTURE_KIND_BY_MODE[this.mode];
+    if (!kind) return;
+    if (event.evt instanceof MouseEvent && event.evt.button !== 0) return;
+    const data = this.fixtureAtPointer(kind);
+    if (!data) return;
+    this.pushUndoSnapshot();
+    this.registerFixture(data);
+    // Призрак — поверх только что поставленной, чтобы было видно, куда встанет следующая.
+    this.fixtureGhost?.group.moveToTop();
+    this.mainLayer.batchDraw();
+  }
+
+  // ─── Групповое выделение ────────────────────────────────────
+
+  /**
+   * Клик по объекту: обычный — выделить только его; с Shift/Ctrl — добавить
+   * к выделению или убрать из него. Группа из одного объекта становится
+   * обычным выделением со своей панелью и ручками.
+   */
+  private pick(id: string, selectSingle: () => void): void {
+    if (!this.additivePick) {
+      this.deselect();
+      selectSingle();
+      return;
+    }
+    const ids = new Set(this.groupSelection);
+    if (this.selectedId) ids.add(this.selectedId);
+    if (ids.has(id)) ids.delete(id);
+    else ids.add(id);
+    this.setGroup(ids);
+  }
+
+  private setGroup(ids: ReadonlySet<string>): void {
+    this.deselect();
+    const known = [...ids].filter(
+      (id) => this.walls.has(id) || this.workspaces.has(id) || this.openings.has(id) || this.fixtures.has(id),
+    );
+    if (known.length === 1) {
+      const [id] = known;
+      const wall = this.walls.get(id);
+      const workspace = this.workspaces.get(id);
+      const opening = this.openings.get(id);
+      const fixture = this.fixtures.get(id);
+      if (wall) this.selectWall(wall);
+      else if (workspace) this.selectWorkspace(workspace);
+      else if (opening) this.selectOpening(opening);
+      else if (fixture) this.selectFixture(fixture);
+      return;
+    }
+    known.forEach((id) => this.groupSelection.add(id));
+    this.highlightGroup(true);
+  }
+
+  private highlightGroup(on: boolean): void {
+    this.groupSelection.forEach((id) => {
+      this.walls.get(id)?.setSelected(on);
+      this.workspaces.get(id)?.setHighlighted(on);
+      this.fixtures.get(id)?.setSelected(on);
+      const opening = this.openings.get(id);
+      if (opening) {
+        opening.setSelected(on);
+        this.renderOpening(opening);
+      }
+    });
+    this.structureLayer.batchDraw();
+    this.openingLayer.batchDraw();
+    this.mainLayer.batchDraw();
+  }
+
+  /** Сколько объектов выделено — для панели (1 — обычное выделение). */
+  getSelectionCount(): number {
+    return this.groupSelection.size || (this.selectedId ? 1 : 0);
+  }
+
+  private removeGroup(): void {
+    this.pushUndoSnapshot();
+    const ids = [...this.groupSelection];
+    this.deselect();
+    ids.forEach((id) => {
+      const wall = this.walls.get(id);
+      if (wall) {
+        wall.destroy();
+        this.walls.delete(id);
+      }
+      const workspace = this.workspaces.get(id);
+      if (workspace) {
+        workspace.group.destroy();
+        this.workspaces.delete(id);
+      }
+      const opening = this.openings.get(id);
+      if (opening) {
+        opening.group.destroy();
+        this.openings.delete(id);
+      }
+      const fixture = this.fixtures.get(id);
+      if (fixture) {
+        fixture.group.destroy();
+        this.fixtures.delete(id);
+      }
+    });
+    this.pruneOrphanNodes();
+    this.rebuildWallGeometry();
+    this.mainLayer.batchDraw();
+  }
+
+  /**
+   * Перетаскивание группы: всё выделенное едет вместе на одно и то же
+   * смещение — узлы выделенных стен (соседние стены тянутся за ними), столы,
+   * а проёмы — вместе со своими стенами. Без ограничений одиночного сдвига
+   * стены: группу двигают целиком, а не подгоняют к соседям.
+   */
+  private startGroupMove(): void {
+    const pointer = this.pressPointer ?? this.stage.getRelativePointerPosition();
+    if (!pointer) return;
+    const nodes = new Map<string, { x: Cm; y: Cm }>();
+    const desks = new Map<string, { x: number; y: number }>();
+    this.groupSelection.forEach((id) => {
+      const wall = this.walls.get(id);
+      if (wall) {
+        [wall.startNodeId, wall.endNodeId].forEach((nodeId) => {
+          const node = this.nodes.get(nodeId);
+          if (node) nodes.set(nodeId, { x: node.x, y: node.y });
+        });
+      }
+      const item = this.movableGroup(id);
+      if (item) desks.set(id, item.position());
+    });
+    this.groupMove = { pointer, nodes, desks, snapshotTaken: false };
+  }
+
+  private continueGroupMove(): void {
+    const move = this.groupMove;
+    const pointer = this.stage.getRelativePointerPosition();
+    if (!move || !pointer) return;
+    const dx = pointer.x - move.pointer.x;
+    const dy = pointer.y - move.pointer.y;
+    const started = Math.hypot(dx, dy) * this.stage.scaleX() >= WALL_MOVE_THRESHOLD_SCREEN_PX;
+    const shift = started ? { x: dx, y: dy } : { x: 0, y: 0 };
+    if (started && !move.snapshotTaken) {
+      // Снимок до первого сдвига: позиции столов в нём ещё исходные.
+      move.desks.forEach((origin, id) => this.movableGroup(id)?.position(origin));
+      this.pushUndoSnapshot();
+      move.snapshotTaken = true;
+    }
+    move.nodes.forEach((origin, id) => {
+      const node = this.nodes.get(id);
+      if (!node) return;
+      node.x = cm(origin.x + pxToCm(shift.x));
+      node.y = cm(origin.y + pxToCm(shift.y));
+    });
+    move.desks.forEach((origin, id) => {
+      this.movableGroup(id)?.position({ x: origin.x + shift.x, y: origin.y + shift.y });
+    });
+    if (move.nodes.size > 0) this.rebuildWallGeometry();
+    this.mainLayer.batchDraw();
+  }
+
+  /** Стол или лестница/лифт — то, что в групповом сдвиге едет своей Konva-группой. */
+  private movableGroup(id: string): Konva.Group | undefined {
+    return this.workspaces.get(id)?.group ?? this.fixtures.get(id)?.group;
+  }
+
+  private finishGroupMove(): void {
+    // Лестница/лифт перерисовываются из своих данных — сначала забираем в них новое место.
+    this.groupMove?.desks.forEach((_, id) => {
+      const fixture = this.fixtures.get(id);
+      if (fixture) fixture.data = fixture.toData();
+    });
+    this.groupMove = null;
+    this.rebuildWallGeometry();
+    this.highlightGroup(true);
+  }
+
+  /** Рамка выделения (Shift + протяжка по пустому месту): что целиком внутри — в выделение. */
+  private startMarquee(): void {
+    const start = this.stage.getRelativePointerPosition();
+    if (!start) return;
+    const p = palette();
+    const rect = new Konva.Rect({
+      x: start.x,
+      y: start.y,
+      width: 0,
+      height: 0,
+      stroke: p.accent,
+      strokeWidth: 1,
+      strokeScaleEnabled: false,
+      dash: [6, 4],
+      fill: withAlpha(p.accent, 0.08),
+      listening: false,
+    });
+    this.controlsLayer.add(rect);
+    this.marquee = { start, rect, stagePosition: this.stage.position() };
+  }
+
+  private updateMarquee(): void {
+    const marquee = this.marquee;
+    const pointer = marquee && this.stage.getRelativePointerPosition();
+    if (!marquee || !pointer) return;
+    marquee.rect.setAttrs({
+      x: Math.min(marquee.start.x, pointer.x),
+      y: Math.min(marquee.start.y, pointer.y),
+      width: Math.abs(pointer.x - marquee.start.x),
+      height: Math.abs(pointer.y - marquee.start.y),
+    });
+    this.controlsLayer.batchDraw();
+  }
+
+  private readonly handleMarqueeEnd = (event: MouseEvent | TouchEvent): void => {
+    const marquee = this.marquee;
+    if (!marquee) return;
+    // mousemove Konva прореживает — дотягиваем рамку до точки, где отпустили.
+    this.stage.setPointersPositions(event);
+    this.updateMarquee();
+    this.marquee = null;
+    const { x, y, width, height } = marquee.rect.getAttrs() as { x: number; y: number; width: number; height: number };
+    marquee.rect.destroy();
+    this.controlsLayer.batchDraw();
+    if (width < 2 && height < 2) return;
+    this.suppressStageClick = true;
+    window.setTimeout(() => {
+      this.suppressStageClick = false;
+    }, 0);
+    const inside = (point: WallEndpoint): boolean =>
+      point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height;
+
+    const ids = new Set(this.groupSelection);
+    if (this.selectedId) ids.add(this.selectedId);
+    this.walls.forEach((wall) => {
+      if (inside(this.nodePointPx(wall.startNodeId)) && inside(this.nodePointPx(wall.endNodeId))) ids.add(wall.id);
+    });
+    this.workspaces.forEach((workspace) => {
+      if (workspace.cornersPx().every(inside)) ids.add(workspace.id);
+    });
+    this.fixtures.forEach((fixture) => {
+      if (inside(fixture.group.position())) ids.add(fixture.id);
+    });
+    this.openings.forEach((opening) => {
+      const wall = this.walls.get(opening.data.segmentId);
+      if (!wall) return;
+      const { startPx, endPx, lengthPx } = this.segmentGeometryPx(wall);
+      if (lengthPx === 0) return;
+      const t = cmToPx(opening.data.offset) / lengthPx;
+      const center = { x: startPx.x + (endPx.x - startPx.x) * t, y: startPx.y + (endPx.y - startPx.y) * t };
+      if (inside(center)) ids.add(opening.id);
+    });
+    this.setGroup(ids);
+  };
+
   /** Удаляет выделенный объект (стену или рабочее место). Ничего не делает, если ничего не выделено. */
   removeSelected(): void {
+    if (this.groupSelection.size > 0) {
+      this.removeGroup();
+      return;
+    }
     if (!this.selectedId) {
       return;
     }
     this.pushUndoSnapshot();
 
     const wall = this.walls.get(this.selectedId);
+    const opening = this.openings.get(this.selectedId);
     if (wall) {
       wall.destroy();
       this.walls.delete(this.selectedId);
       this.pruneOrphanNodes();
       this.rebuildWallGeometry();
+    } else if (opening) {
+      opening.group.destroy();
+      this.openings.delete(opening.id);
+      this.openingLayer.batchDraw();
+    } else if (this.fixtures.has(this.selectedId)) {
+      this.fixtures.get(this.selectedId)?.group.destroy();
+      this.fixtures.delete(this.selectedId);
+      this.mainLayer.batchDraw();
     } else {
       const workspace = this.workspaces.get(this.selectedId);
       workspace?.group.destroy();
@@ -2105,6 +3032,9 @@ export class FloorPlanCanvas {
       nodes: Array.from(this.nodes.values()).map((node) => ({ ...node })),
       segments: Array.from(this.walls.values()).map((wall) => wall.toSegmentData()),
       workspaces: Array.from(this.workspaces.values()).map((workspace) => workspace.toData()),
+      rooms: Array.from(this.roomLabels.values()).map((label) => ({ ...label })),
+      openings: Array.from(this.openings.values()).map((opening) => ({ ...opening.data })),
+      fixtures: Array.from(this.fixtures.values()).map((fixture) => fixture.toData()),
     };
   }
 
@@ -2125,10 +3055,17 @@ export class FloorPlanCanvas {
     this.nodes.clear();
     this.workspaces.forEach((workspace) => workspace.group.destroy());
     this.workspaces.clear();
+    this.roomLabels = new Map((data.rooms ?? []).map((label) => [label.id, { ...label }]));
 
     data.nodes.forEach((node) => this.registerWallNode(node));
     data.segments.forEach((segment) => this.registerWallSegment(segment));
     data.workspaces.forEach((workspaceData) => this.addWorkspace(workspaceData));
+    this.openings.forEach((opening) => opening.group.destroy());
+    this.openings.clear();
+    (data.openings ?? []).forEach((opening) => this.registerOpening(opening));
+    this.fixtures.forEach((fixture) => fixture.group.destroy());
+    this.fixtures.clear();
+    (data.fixtures ?? []).forEach((fixture) => this.registerFixture(fixture));
 
     this.isRestoring = false;
     this.rebuildWallGeometry();
@@ -2144,6 +3081,8 @@ export class FloorPlanCanvas {
     if (this.undoStack.length > UNDO_STACK_DEPTH) {
       this.undoStack.shift();
     }
+    this.redoStack = [];
+    this.onHistoryChange?.();
   }
 
   /** Откатывает последнее изменяющее действие (создание/удаление/drag/transform). */
@@ -2152,7 +3091,81 @@ export class FloorPlanCanvas {
     if (!snapshot) {
       return;
     }
+    this.redoStack.push(this.serialize());
     this.restore(snapshot);
+    this.onHistoryChange?.();
+  }
+
+  /** Возвращает последнее отменённое действие. */
+  redo(): void {
+    const snapshot = this.redoStack.pop();
+    if (!snapshot) {
+      return;
+    }
+    this.undoStack.push(this.serialize());
+    this.restore(snapshot);
+    this.onHistoryChange?.();
+  }
+
+  canUndo(): boolean {
+    return this.undoStack.length > 0;
+  }
+
+  canRedo(): boolean {
+    return this.redoStack.length > 0;
+  }
+
+  /** Колбэк на любое изменение истории — чтобы тулбар включал и выключал «Отменить»/«Повторить». */
+  setOnHistoryChange(callback: () => void): void {
+    this.onHistoryChange = callback;
+  }
+
+  /**
+   * Показывает другой этаж: его сцену и его собственную историю отмены —
+   * Ctrl+Z на одном этаже не должен откатывать на него снимок соседнего.
+   */
+  showFloor(data: SceneData, history: readonly SceneData[] = []): void {
+    this.restore(migrateSceneData(data));
+    this.undoStack = [...history];
+    this.redoStack = [];
+    this.onHistoryChange?.();
+  }
+
+  /**
+   * Силуэт другого этажа под текущим: оси его стен линиями толщиной в
+   * стену, без штриховки и проёмов — чтобы совместить стены этажей. null —
+   * убрать. Лежит над заливкой помещений, но под стенами текущего этажа.
+   */
+  setUnderlay(scene: SceneData | null): void {
+    this.underlay = scene;
+    this.renderUnderlay();
+  }
+
+  private renderUnderlay(): void {
+    this.underlayGroup.destroyChildren();
+    const scene = this.underlay;
+    if (scene) {
+      const nodes = new Map(scene.nodes.map((node) => [node.id, node]));
+      scene.segments.forEach((segment) => {
+        const start = nodes.get(segment.startNodeId);
+        const end = nodes.get(segment.endNodeId);
+        if (!start || !end) return;
+        this.underlayGroup.add(
+          new Konva.Line({
+            points: [cmToPx(start.x), cmToPx(start.y), cmToPx(end.x), cmToPx(end.y)],
+            stroke: palette()['line-strong'],
+            strokeWidth: cmToPx(segment.thickness),
+            lineCap: 'square',
+          }),
+        );
+      });
+    }
+    this.backgroundLayer.batchDraw();
+  }
+
+  /** История отмены текущего этажа — чтобы вернуть её при обратном переключении (см. showFloor). */
+  getHistory(): SceneData[] {
+    return [...this.undoStack];
   }
 
   /**
@@ -2568,7 +3581,9 @@ export class FloorPlanCanvas {
       endNodeId: w.endNodeId,
       thickness: cmToPx(w.thicknessCm),
     }));
-    for (const room of findRooms(nodes, edges)) {
+    this.rooms = findRooms(nodes, edges);
+    this.numberNewRooms();
+    for (const room of this.rooms) {
       this.roomGroup.add(
         new Konva.Line({
           points: room.polygon.flatMap((p) => [p.x, p.y]),
@@ -2577,19 +3592,402 @@ export class FloorPlanCanvas {
           listening: false,
         }),
       );
-      const areaM2 = room.area / (PIXELS_PER_CM * PIXELS_PER_CM) / 10000;
-      const label = new Konva.Text({
-        text: `${areaM2.toFixed(2)} м²`,
-        fontSize: 14 / scale,
-        fill: palette()['ink-muted'],
-        fontFamily: palette().fontSans,
-        listening: false,
-      });
-      const c = polygonCentroid(room.polygon);
-      label.position({ x: c.x - label.width() / 2, y: c.y - label.height() / 2 });
-      this.roomGroup.add(label);
+      const roomLabel = this.roomLabelIn(room);
+      if (roomLabel) {
+        this.roomGroup.add(this.createRoomCaption(roomLabel, polygonCentroid(room.polygon), scale));
+      }
     }
     this.backgroundLayer.batchDraw();
+  }
+
+  /** Название крупно, под ним примечание, если есть; блок по центру помещения, размер не зависит от зума. */
+  private createRoomCaption(roomLabel: RoomLabel, center: WallEndpoint, scale: number): Konva.Group {
+    const caption = new Konva.Group({ listening: false });
+    const title = new Konva.Text({
+      text: roomLabel.title,
+      fontSize: 15 / scale,
+      fontStyle: 'bold',
+      fill: palette().ink,
+      fontFamily: palette().fontSans,
+    });
+    caption.add(title);
+    let height = title.height();
+    let width = title.width();
+    if (roomLabel.note) {
+      const note = new Konva.Text({
+        text: roomLabel.note,
+        y: height + 2 / scale,
+        fontSize: 12 / scale,
+        fill: palette()['ink-muted'],
+        fontFamily: palette().fontSans,
+      });
+      caption.add(note);
+      height = note.y() + note.height();
+      width = Math.max(width, note.width());
+    }
+    caption.getChildren().forEach((text) => text.x((width - text.width()) / 2));
+    caption.position({ x: center.x - width / 2, y: center.y - height / 2 });
+    return caption;
+  }
+
+  /**
+   * Каждому помещению без подписи — подпись "каб. N" со следующим по порядку
+   * номером (см. nextRoomTitles). Меняет сцену без снимка в undo: помещение
+   * появляется только вместе с изменяющим действием (замкнули контур,
+   * открыли план), и снимок до него уже взят — откат убирает и стену, и номер.
+   * Точка подписи — центр помещения, а не место у стены: так она не выпадет
+   * из контура при первом же сдвиге стены.
+   */
+  private numberNewRooms(): void {
+    const taken: string[] = [];
+    const unlabeled: Room[] = [];
+    this.rooms.forEach((room) => {
+      const roomLabel = this.roomLabelIn(room);
+      if (roomLabel) {
+        taken.push(roomLabel.title);
+      } else {
+        unlabeled.push(room);
+      }
+    });
+    const centers = unlabeled.map((room) => polygonCentroid(room.polygon));
+    const corners = unlabeled.map((room) => ({
+      x: Math.min(...room.polygon.map((point) => point.x)),
+      y: Math.min(...room.polygon.map((point) => point.y)),
+    }));
+    nextRoomTitles(taken, corners).forEach((title, index) => {
+      const id = generateId('room');
+      this.roomLabels.set(id, { id, x: pxToCm(centers[index].x), y: pxToCm(centers[index].y), title, note: '' });
+    });
+  }
+
+  /** Подпись, точка которой лежит внутри помещения; при нескольких (слили две комнаты) — первая. */
+  private roomLabelIn(room: Room): RoomLabel | undefined {
+    for (const label of this.roomLabels.values()) {
+      if (pointInPolygon({ x: cmToPx(label.x), y: cmToPx(label.y) }, room.polygon)) {
+        return label;
+      }
+    }
+    return undefined;
+  }
+
+  // ─── Двери и окна ───────────────────────────────────────────
+
+  /** Регистрирует проём без снимка в undo; отрисуется в ближайшем rebuildWallGeometry/renderOpenings. */
+  private registerOpening(data: WallOpening): Opening {
+    const opening = new Opening(data, {
+      onSelect: (selected) => this.pick(selected.id, () => this.selectOpening(selected)),
+    });
+    opening.group.draggable(this.mode === 'select');
+    // Тащим проём только вдоль его стены: сама группа не сдвигается, на
+    // каждый dragmove пересчитывается offset по проекции курсора на ось.
+    opening.group.on('dragstart', () => {
+      if (this.groupSelection.has(opening.id)) {
+        this.startGroupMove();
+        return;
+      }
+      this.pushUndoSnapshot();
+      this.selectOpening(opening);
+    });
+    opening.group.on('dragend', () => {
+      if (this.groupMove) this.finishGroupMove();
+    });
+    opening.group.on('dragmove', () => {
+      opening.group.position({ x: 0, y: 0 });
+      if (this.groupMove) {
+        this.continueGroupMove();
+        return;
+      }
+      const pointer = this.stage.getRelativePointerPosition();
+      const wall = this.walls.get(opening.data.segmentId);
+      if (!pointer || !wall) return;
+      const { startPx, endPx, lengthPx } = this.segmentGeometryPx(wall);
+      const { offset } = projectPointToSegmentOffset(pointer, startPx, endPx);
+      const next = clampOpeningOffset(
+        pxToCm(offset),
+        opening.data.width,
+        pxToCm(lengthPx),
+        this.openingRangesOn(wall.id, opening.id),
+      );
+      if (next !== null) {
+        opening.data.offset = cm(next);
+      }
+      this.renderOpening(opening);
+    });
+    this.openingLayer.add(opening.group);
+    this.openings.set(opening.id, opening);
+    return opening;
+  }
+
+  /** Заменяет все проёмы новым списком (после разбиения стены). */
+  private replaceOpenings(list: readonly WallOpening[]): void {
+    const keep = new Set(list.map((data) => data.id));
+    this.openings.forEach((opening, id) => {
+      if (!keep.has(id)) {
+        opening.group.destroy();
+        this.openings.delete(id);
+      }
+    });
+    list.forEach((data) => {
+      const existing = this.openings.get(data.id);
+      if (existing) {
+        existing.data = { ...data };
+      } else {
+        this.registerOpening(data);
+      }
+    });
+  }
+
+  /** Занятые участки стены (см) — все проёмы на ней, кроме exceptId. */
+  private openingRangesOn(segmentId: string, exceptId?: string): OccupiedRange[] {
+    const ranges: OccupiedRange[] = [];
+    this.openings.forEach((opening) => {
+      if (opening.data.segmentId === segmentId && opening.id !== exceptId) {
+        ranges.push({ offset: opening.data.offset, width: opening.data.width });
+      }
+    });
+    return ranges;
+  }
+
+  /**
+   * После любой правки стен: проём, чья стена исчезла (удалили, слили
+   * узлы), удаляется; на укоротившейся стене — сдвигается внутрь, а не
+   * поместившийся — удаляется. Снимок в undo уже взят тем действием,
+   * которое поменяло стены.
+   */
+  private syncOpenings(): void {
+    const bySegment = new Map<string, Opening[]>();
+    this.openings.forEach((opening) => {
+      const list = bySegment.get(opening.data.segmentId) ?? [];
+      list.push(opening);
+      bySegment.set(opening.data.segmentId, list);
+    });
+    bySegment.forEach((list, segmentId) => {
+      const wall = this.walls.get(segmentId);
+      const lengthCm = wall ? pxToCm(this.segmentGeometryPx(wall).lengthPx) : 0;
+      const placed: OccupiedRange[] = [];
+      [...list]
+        .sort((a, b) => a.data.offset - b.data.offset)
+        .forEach((opening) => {
+          const next = wall ? clampOpeningOffset(opening.data.offset, opening.data.width, lengthCm, placed) : null;
+          if (next === null) {
+            if (this.selectedId === opening.id) this.selectedId = null;
+            opening.group.destroy();
+            this.openings.delete(opening.id);
+            return;
+          }
+          opening.data.offset = cm(next);
+          placed.push({ offset: next, width: opening.data.width });
+        });
+    });
+  }
+
+  private renderOpening(opening: Opening): void {
+    const wall = this.walls.get(opening.data.segmentId);
+    if (!wall) {
+      opening.group.visible(false);
+      return;
+    }
+    const { startPx, endPx, thicknessPx } = this.segmentGeometryPx(wall);
+    opening.render({ start: startPx, end: endPx, thickness: thicknessPx });
+    opening.group.visible(true);
+  }
+
+  private renderOpenings(): void {
+    this.openings.forEach((opening) => this.renderOpening(opening));
+    this.openingLayer.batchDraw();
+  }
+
+  private selectOpening(opening: Opening): void {
+    if (this.mode !== 'select') return;
+    this.clearWallSelectionHighlight();
+    this.selectedId = opening.id;
+    this.selectedWallThicknessSnapshotTaken = false;
+    this.deskSelection.detach();
+    opening.setSelected(true);
+    this.renderOpening(opening);
+    this.openingLayer.batchDraw();
+    this.structureLayer.batchDraw();
+    this.mainLayer.batchDraw();
+    this.updateWallControls();
+    this.emitSelectionChange();
+  }
+
+  /** Выделенный проём (копия данных) — для панели настроек; null, если выделен не проём. */
+  getSelectedOpening(): WallOpening | null {
+    const opening = this.selectedId ? this.openings.get(this.selectedId) : undefined;
+    return opening ? { ...opening.data } : null;
+  }
+
+  getOpeningTool(mode: OpeningToolMode): OpeningOptions {
+    return { ...this.openingTools[mode] };
+  }
+
+  /** Меняет параметры будущих проёмов инструмента; возвращает их после приведения к пределам вида. */
+  setOpeningTool(mode: OpeningToolMode, patch: Partial<OpeningOptions>): OpeningOptions {
+    this.openingTools[mode] = normalizeOpeningOptions(this.openingTools[mode], patch);
+    if (this.mode === mode) this.updateOpeningGhost();
+    return this.getOpeningTool(mode);
+  }
+
+  /**
+   * Правит выделенный проём: вид, ширину, высоту, подоконник (см.
+   * normalizeOpeningOptions). Центр по возможности остаётся на месте; если
+   * новая ширина не помещается на стене между соседями — ничего не меняет
+   * и возвращает null.
+   */
+  updateSelectedOpening(patch: Partial<OpeningOptions>): WallOpening | null {
+    const opening = this.selectedId ? this.openings.get(this.selectedId) : undefined;
+    const wall = opening ? this.walls.get(opening.data.segmentId) : undefined;
+    if (!opening || !wall) return null;
+    const next = normalizeOpeningOptions(opening.data, patch);
+    const offset = clampOpeningOffset(
+      opening.data.offset,
+      next.width,
+      pxToCm(this.segmentGeometryPx(wall).lengthPx),
+      this.openingRangesOn(wall.id, opening.id),
+    );
+    if (offset === null) return null;
+    const { data } = opening;
+    const changed =
+      next.kind !== data.kind ||
+      next.width !== data.width ||
+      next.height !== data.height ||
+      next.sillHeight !== data.sillHeight ||
+      offset !== data.offset;
+    if (changed) {
+      this.pushUndoSnapshot();
+      opening.data = {
+        ...data,
+        kind: next.kind,
+        width: cm(next.width),
+        height: cm(next.height),
+        sillHeight: cm(next.sillHeight),
+        offset: cm(offset),
+      };
+      this.renderOpening(opening);
+      this.openingLayer.batchDraw();
+    }
+    return { ...opening.data };
+  }
+
+  /** Двери: перевесить петли к другому краю проёма ('hinge') или открывать в другую сторону ('swing'). */
+  flipSelectedOpening(part: 'hinge' | 'swing'): void {
+    const opening = this.selectedId ? this.openings.get(this.selectedId) : undefined;
+    if (!opening) return;
+    this.pushUndoSnapshot();
+    if (part === 'hinge') {
+      opening.data.hinge = opening.data.hinge === 'start' ? 'end' : 'start';
+    } else {
+      opening.data.swing = opening.data.swing === 'left' ? 'right' : 'left';
+    }
+    this.renderOpening(opening);
+    this.openingLayer.batchDraw();
+  }
+
+  /**
+   * Куда встанет новый проём под курсором: ближайшая стена, в чью толщину
+   * (с допуском OPENING_SNAP_SCREEN_PX) попадает курсор, центр — проекция
+   * курсора на ось, сдвинутая так, чтобы не налезть на края и соседние
+   * проёмы. Дверь открывается в ту сторону, с которой курсор.
+   */
+  private openingAtPointer(options: OpeningOptions): WallOpening | null {
+    const pointer = this.stage.getRelativePointerPosition();
+    if (!pointer) return null;
+    const tolerance = OPENING_SNAP_SCREEN_PX / this.stage.scaleX();
+    let best: { wall: Wall; offsetPx: number; side: 'left' | 'right'; gap: number } | null = null;
+    for (const wall of this.walls.values()) {
+      const { startPx, endPx, thicknessPx, lengthPx } = this.segmentGeometryPx(wall);
+      if (lengthPx === 0) continue;
+      const { offset, side } = projectPointToSegmentOffset(pointer, startPx, endPx);
+      // До самого отрезка, а не до его прямой: иначе курсор "попадал" бы и
+      // во все стены, лежащие на одной прямой с нужной (соседние участки
+      // наружной стены, перегородки напротив).
+      const closest = {
+        x: startPx.x + ((endPx.x - startPx.x) * offset) / lengthPx,
+        y: startPx.y + ((endPx.y - startPx.y) * offset) / lengthPx,
+      };
+      const gap = Math.hypot(pointer.x - closest.x, pointer.y - closest.y) - thicknessPx / 2;
+      if (gap <= tolerance && (!best || gap < best.gap)) {
+        best = { wall, offsetPx: offset, side, gap };
+      }
+    }
+    if (!best) return null;
+    const { wall, offsetPx, side } = best;
+    const offset = clampOpeningOffset(
+      pxToCm(offsetPx),
+      options.width,
+      pxToCm(this.segmentGeometryPx(wall).lengthPx),
+      this.openingRangesOn(wall.id),
+    );
+    if (offset === null) return null;
+    return {
+      id: generateId(options.kind === 'window' || options.kind === 'windowway' ? 'window' : 'door'),
+      segmentId: wall.id,
+      kind: options.kind,
+      offset: cm(offset),
+      width: cm(options.width),
+      height: cm(options.height),
+      sillHeight: cm(options.sillHeight),
+      hinge: 'start',
+      swing: side,
+    };
+  }
+
+  private updateOpeningGhost(): void {
+    if (!isOpeningTool(this.mode)) return;
+    const data = this.openingAtPointer(this.openingTools[this.mode]);
+    const wall = data ? this.walls.get(data.segmentId) : undefined;
+    if (!data || !wall) {
+      this.hideOpeningGhost();
+      return;
+    }
+    if (!this.openingGhost) {
+      this.openingGhost = new Opening(data, { ghost: true });
+      this.openingLayer.add(this.openingGhost.group);
+    }
+    this.openingGhost.data = data;
+    const { startPx, endPx, thicknessPx } = this.segmentGeometryPx(wall);
+    this.openingGhost.render({ start: startPx, end: endPx, thickness: thicknessPx });
+    this.openingGhost.group.visible(true);
+    this.openingLayer.batchDraw();
+  }
+
+  private hideOpeningGhost(): void {
+    if (this.openingGhost?.group.visible()) {
+      this.openingGhost.group.visible(false);
+      this.openingLayer.batchDraw();
+    }
+  }
+
+  private handleOpeningPlaceClick(event: Konva.KonvaEventObject<MouseEvent | TouchEvent>): void {
+    if (!isOpeningTool(this.mode)) return;
+    if (event.evt instanceof MouseEvent && event.evt.button !== 0) return;
+    const data = this.openingAtPointer(this.openingTools[this.mode]);
+    if (!data) return;
+    this.pushUndoSnapshot();
+    this.registerOpening(data);
+    this.renderOpenings();
+    this.updateOpeningGhost();
+  }
+
+  /** Двойной клик по пустому месту помещения — панель правки названия и примечания у самого помещения. */
+  private editRoomAtPointer(): void {
+    const pointer = this.stage.getRelativePointerPosition();
+    const room = pointer && this.rooms.find((candidate) => pointInPolygon(pointer, candidate.polygon));
+    const roomLabel = room ? this.roomLabelIn(room) : undefined;
+    if (!room || !roomLabel) {
+      return;
+    }
+    const at = this.stage.getAbsoluteTransform().point(polygonCentroid(room.polygon));
+    this.roomEditor.open(at, { title: roomLabel.title, note: roomLabel.note }, ({ title, note }) => {
+      if (title === roomLabel.title && note === roomLabel.note) {
+        return;
+      }
+      this.pushUndoSnapshot();
+      roomLabel.title = title;
+      roomLabel.note = note;
+      this.renderRooms(this.stage.scaleX());
+    });
   }
 
   /**

@@ -26,7 +26,7 @@ class FloorPlan(Base):
     __table_args__ = (
         CheckConstraint("width_cm > 0", name="width_positive"),
         CheckConstraint("height_cm > 0", name="height_positive"),
-        CheckConstraint("scene_version BETWEEN 2 AND 3", name="scene_version_known"),
+        CheckConstraint("scene_version BETWEEN 2 AND 4", name="scene_version_known"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)

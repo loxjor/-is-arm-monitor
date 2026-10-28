@@ -33,6 +33,7 @@ export class Workspace {
   private monitor: Konva.Rect;
   private label: Konva.Text;
   private colliding = false;
+  private highlighted = false;
   private status: WorkspaceStatus;
 
   constructor(data: WorkspaceData, onSelect: (workspace: Workspace) => void) {
@@ -107,8 +108,15 @@ export class Workspace {
     const style = statusStyle(this.status);
     // У занятого стола обводка того же цвета, что «столкновение», — тогда пунктир цвета ink.
     const collisionColor = this.status === 'occupied' ? p.ink : p['status-occupied'];
-    this.rect.stroke(this.colliding ? collisionColor : style.stroke);
+    this.rect.stroke(this.colliding ? collisionColor : this.highlighted ? p.accent : style.stroke);
+    this.rect.strokeWidth(this.highlighted ? 3 : 2);
     this.rect.dash(this.colliding ? [6, 4] : []);
+  }
+
+  /** Обводка accent — стол в групповом выделении (одиночное рисует DeskSelection). */
+  setHighlighted(highlighted: boolean): void {
+    this.highlighted = highlighted;
+    this.applyStroke();
   }
 
   sizePx(): { width: number; height: number } {

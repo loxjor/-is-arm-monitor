@@ -61,9 +61,9 @@ function intersectLines(
 
 /**
  * Вершины на стыке двух УГЛОВО СМЕЖНЫХ (идущих подряд при сортировке по
- * углу вокруг узла) лучей rayA → rayB. Возвращает всегда пару точек:
+ * углу вокруг узла) лучей rayA → rayB. Возвращает пару точек [для rayA, для rayB]:
  *  - обычный случай — обе точки совпадают (одна общая вершина угла,
- *    "ус" пересечения правой грани rayA и левой грани rayB);
+ *    "ус" пересечения левой грани rayA и правой грани rayB);
  *  - вырожденные случаи (коллинеарные лучи, критично острый угол) —
  *    точки РАЗНЫЕ: каждый луч получает собственную вершину у самого узла,
  *    без вытягивания навстречу другому (см. комментарии внутри).
@@ -72,34 +72,36 @@ function wedgeVertices(node: WallEndpoint, rayA: NodeRay, rayB: NodeRay): [WallE
   const perpA = rotate90(rayA.dir);
   const perpB = rotate90(rayB.dir);
 
-  // "Правая" грань rayA (смещение -perp) и "левая" грань rayB (смещение
-  // +perp) — это как раз та пара граней, что обращена друг к другу в
-  // клине между rayA и следующим за ним по кругу rayB (выведено и
-  // проверено на примере прямого угла — см. wallPolygon.test.ts).
-  const rightA: WallEndpoint = {
-    x: node.x - perpA.x * rayA.halfThickness,
-    y: node.y - perpA.y * rayA.halfThickness,
+  // Клин между rayA и следующим за ним по возрастанию угла rayB лежит со
+  // стороны +perp от rayA (perp = rotate90(dir) повёрнут в ту же сторону,
+  // куда растёт atan2) и со стороны -perp от rayB: друг к другу обращены
+  // "левая" грань rayA и "правая" грань rayB. У угла из двух стен перепутать
+  // их было незаметно (второй клин даёт ту же пару с обратными метками), а у
+  // T-стыка примыкающая стена при этом прошивала основную насквозь.
+  const leftA: WallEndpoint = {
+    x: node.x + perpA.x * rayA.halfThickness,
+    y: node.y + perpA.y * rayA.halfThickness,
   };
-  const leftB: WallEndpoint = {
-    x: node.x + perpB.x * rayB.halfThickness,
-    y: node.y + perpB.y * rayB.halfThickness,
+  const rightB: WallEndpoint = {
+    x: node.x - perpB.x * rayB.halfThickness,
+    y: node.y - perpB.y * rayB.halfThickness,
   };
 
   const cross = rayA.dir.x * rayB.dir.y - rayA.dir.y * rayB.dir.x;
   if (Math.abs(cross) < COLLINEAR_SIN_EPS) {
     // Вырожденный случай: коллинеарные рёбра (стена продолжается "напролёт"
     // без излома, либо ребро идёт назад само на себя). Грани параллельны —
-    // пересечения нет. При одинаковой толщине с обеих сторон rightA и leftB
+    // пересечения нет. При одинаковой толщине с обеих сторон leftA и rightB
     // и так совпадают (одна и та же линия); при разной — каждое ребро
     // получает свою точку у узла, стык выглядит небольшой ступенькой,
     // что и ожидается при переходе толщины.
-    return [rightA, leftB];
+    return [leftA, rightB];
   }
 
-  // Пересечение прямой (rightA, rayA.dir) и прямой (leftB, rayB.dir).
+  // Пересечение прямой (leftA, rayA.dir) и прямой (rightB, rayB.dir).
   const t =
-    ((leftB.x - rightA.x) * rayB.dir.y - (leftB.y - rightA.y) * rayB.dir.x) / cross;
-  const vertex: WallEndpoint = { x: rightA.x + rayA.dir.x * t, y: rightA.y + rayA.dir.y * t };
+    ((rightB.x - leftA.x) * rayB.dir.y - (rightB.y - leftA.y) * rayB.dir.x) / cross;
+  const vertex: WallEndpoint = { x: leftA.x + rayA.dir.x * t, y: leftA.y + rayA.dir.y * t };
 
   const miterLength = Math.hypot(vertex.x - node.x, vertex.y - node.y);
   const limit = MITER_LIMIT * Math.max(rayA.halfThickness, rayB.halfThickness);
@@ -109,7 +111,7 @@ function wedgeVertices(node: WallEndpoint, rayA: NodeRay, rayB: NodeRay): [WallE
     // stroke-miterlimit). Переходим на срез: вместо далёкого "уса" каждое
     // ребро получает свою вершину прямо у узла (как в коллинеарном
     // случае) — угол получает плоский срез вместо вылетающего шпиля.
-    return [rightA, leftB];
+    return [leftA, rightB];
   }
 
   return [vertex, vertex];
@@ -183,8 +185,8 @@ export function computeNodeFaceVertices(
     const rayA = sorted[k];
     const rayB = sorted[(k + 1) % n];
     const [pA, pB] = wedgeVertices(node, rayA, rayB);
-    rightVertexByKey.set(rayA.key, pA);
-    leftVertexByKey.set(rayB.key, pB);
+    leftVertexByKey.set(rayA.key, pA);
+    rightVertexByKey.set(rayB.key, pB);
   }
 
   for (const ray of rays) {
@@ -214,4 +216,31 @@ export function buildSegmentPolygon(
   const leftAtEnd = endFace.right;
   const rightAtEnd = endFace.left;
   return [startFace.left, leftAtEnd, rightAtEnd, startFace.right];
+}
+
+/**
+ * Сердцевина узла, где сходятся два и больше рёбер: многоугольник из вершин
+ * всех рёбер по кругу. Полигоны рёбер сходятся по общим вершинам клиньев, но
+ * между их торцами у самого узла остаётся пустота — треугольник у T-стыка,
+ * квадрат у крестового, скос у среза острого угла. Ни одному ребру она не
+ * принадлежит, поэтому рисуется отдельно (см. WallMass).
+ */
+export function buildNodeHub(
+  rays: readonly NodeRay[],
+  faces: ReadonlyMap<string, NodeFaceVertex>,
+): WallEndpoint[] {
+  if (rays.length < 2) {
+    return [];
+  }
+  const sorted = [...rays].sort(
+    (a, b) => Math.atan2(a.dir.y, a.dir.x) - Math.atan2(b.dir.y, b.dir.x),
+  );
+  const hub: WallEndpoint[] = [];
+  sorted.forEach((ray) => {
+    const face = faces.get(ray.key);
+    if (face) {
+      hub.push(face.right, face.left);
+    }
+  });
+  return hub;
 }
