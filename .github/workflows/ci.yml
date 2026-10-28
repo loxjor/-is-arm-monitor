@@ -43,7 +43,7 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     # Агент GitHub Actions на самом сервере: входящий SSH из интернета не нужен.
-    runs-on: [self-hosted, arm-monitor]
+    runs-on: [self-hosted, Linux, X64]
     concurrency: deploy
     steps:
       - uses: actions/checkout@v4
