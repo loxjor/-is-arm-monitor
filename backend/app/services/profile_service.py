@@ -6,9 +6,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models import AppUser, Building, Department, Employee, Room, Ticket, TicketStatus, Workplace
-from app.schemas.profile import DepartmentBrief, PersonBrief, Profile, Territory
-from app.services import equipment_service
+from app.core.security import hash_password, verify_password
+from app.schemas.profile import DepartmentBrief, PasswordChange, PersonBrief, Profile, ProfileUpdate, Territory
+from app.services import audit_service, equipment_service
 from app.services.equipment_service import EquipmentFilters
+from app.services.errors import ConflictError
 
 
 def _person(employee: Employee) -> PersonBrief:
@@ -19,6 +21,38 @@ def _person(employee: Employee) -> PersonBrief:
         phone=employee.phone,
         email=employee.email,
     )
+
+
+def update_profile(db: Session, user: AppUser, data: ProfileUpdate) -> Profile:
+    employee = user.employee
+    values = data.model_dump()
+    changes = {
+        name: {"from": getattr(employee, name), "to": value}
+        for name, value in values.items()
+        if getattr(employee, name) != value
+    }
+    for name, value in values.items():
+        setattr(employee, name, value)
+    if changes:
+        audit_service.record(
+            db, user_id=user.user_id, action="update", entity="employee", entity_id=employee.employee_id,
+            details=changes,
+        )
+    db.commit()
+    return get_profile(db, user)
+
+
+def change_password(db: Session, user: AppUser, data: PasswordChange) -> None:
+    if not verify_password(data.current_password, user.password_hash):
+        raise ConflictError("Текущий пароль указан неверно")
+    if data.new_password == data.current_password:
+        raise ConflictError("Новый пароль совпадает с текущим")
+    user.password_hash = hash_password(data.new_password)
+    audit_service.record(
+        db, user_id=user.user_id, action="update", entity="app_user", entity_id=user.user_id,
+        details={"password": "changed"},
+    )
+    db.commit()
 
 
 def get_profile(db: Session, user: AppUser) -> Profile:

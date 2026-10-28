@@ -58,6 +58,30 @@ def test_register_by_type_manufacturer_model_keeps_only_type_specs(client: TestC
     assert again["model_id"] == card["model_id"]
 
 
+def test_model_specs_come_from_first_registered_unit(client: TestClient) -> None:
+    headers = login(client, "sysadmin")
+    base = {"type_id": _type_id(client, headers, "Монитор"), "manufacturer_name": "Dell", "model_name": "P2422H"}
+    first = client.post("/api/v1/equipment", headers=headers, json={
+        **base, "inventory_no": "ВТ-777030", "diagonal_inch": "24", "resolution": "1920×1080", "connection_type": "HDMI"
+    }).json()
+    client.post("/api/v1/equipment", headers=headers, json={
+        **base, "inventory_no": "ВТ-777031", "diagonal_inch": "27", "resolution": "2560×1440"})
+    specs = client.get(f"/api/v1/equipment/models/{first['model_id']}/specs", headers=headers).json()
+    assert specs["diagonal_inch"] == 24 and specs["resolution"] == "1920×1080" and specs["connection_type"] == "HDMI"
+    assert specs["cpu"] is None
+    assert client.get("/api/v1/equipment/models/99999/specs", headers=headers).status_code == 404
+
+
+def test_update_without_ip_keeps_existing_ip(client: TestClient) -> None:
+    headers = login(client, "sysadmin")
+    model_id = client.get("/api/v1/equipment-models", headers=headers).json()["items"][0]["model_id"]
+    created = client.post("/api/v1/equipment", headers=headers,
+                          json={"inventory_no": "ВТ-777020", "model_id": model_id, "ip_address": "10.0.0.5"}).json()
+    updated = client.put(f"/api/v1/equipment/{created['equipment_id']}", headers=headers,
+                         json={"inventory_no": "ВТ-777020", "model_id": model_id, "hostname": "PC-Y"}).json()
+    assert updated["ip_address"] == "10.0.0.5" and updated["hostname"] == "PC-Y"
+
+
 def test_register_requires_model_or_type_manufacturer_model(client: TestClient) -> None:
     headers = login(client, "sysadmin")
     response = client.post("/api/v1/equipment", json={"inventory_no": "ВТ-777012"}, headers=headers)

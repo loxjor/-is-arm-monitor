@@ -5,16 +5,17 @@ import { can, currentUser } from '../auth';
 import { OPERATION_LABELS, TICKET_TYPE_LABELS, statusBadge, ticketBadge } from '../labels';
 import { DataTable } from '../ui/DataTable';
 import { dash, formatDate, formatMoney, h, type Child } from '../ui/dom';
+import { printLabels } from '../ui/label';
 import { errorMessage, toast } from '../ui/toast';
 import { openAssignmentForm } from './assignmentForm';
 import { openEquipmentForm } from './equipmentForm';
+import type { RouteContext, Screen } from './Screen';
 
 const SCAN_MODE_LABELS: Record<string, string> = {
   flatbed: 'со стекла',
   feeder: 'потоковая',
   duplex_feeder: 'потоковая двусторонняя',
 };
-import type { RouteContext, Screen } from './Screen';
 
 function facts(rows: [string, Child][]): HTMLElement {
   return h('dl', { class: 'facts' }, rows.flatMap(([term, value]) => [h('dt', null, term), h('dd', null, value)]));
@@ -113,6 +114,10 @@ export class EquipmentCardScreen implements Screen {
         ),
         h('div', { class: 'actions' },
           operations,
+          h('button', {
+            type: 'button', class: 'arm-btn arm-btn-light',
+            onclick: () => printLabels([card]).catch((error) => toast(errorMessage(error))),
+          }, 'Печать этикетки'),
           can('create_tickets') && card.status !== 'written_off'
             ? h('a', { class: 'arm-btn arm-btn-light', href: `#/tickets/new?equipment=${card.equipment_id}` }, 'Подать заявку')
             : null,

@@ -5,7 +5,7 @@ from app.api.deps import get_current_user, require
 from app.core.permissions import Permission
 from app.db.session import get_db
 from app.models import AppUser, EquipmentStatus
-from app.schemas.equipment import AssignmentCreate, EquipmentCard, EquipmentListItem, EquipmentWrite
+from app.schemas.equipment import AssignmentCreate, EquipmentCard, EquipmentListItem, EquipmentWrite, ModelSpecs
 from app.schemas.page import Page
 from app.services import assignment_service, equipment_service
 from app.services.equipment_service import EquipmentFilters
@@ -47,6 +47,15 @@ def list_equipment(
 @router.get("/summary", response_model=dict[str, int], description="Количество единиц по статусам")
 def summary(db: Session = Depends(get_db), user: AppUser = Depends(get_current_user)):
     return equipment_service.status_counts(db, user)
+
+
+@router.get("/models/{model_id}/specs", response_model=ModelSpecs,
+            description="Характеристики модели по первой поставленной на учёт единице")
+def model_specs(model_id: int, db: Session = Depends(get_db), user: AppUser = Depends(_editor)):
+    try:
+        return equipment_service.model_specs(db, model_id)
+    except NotFoundError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error))
 
 
 @router.get("/{equipment_id}", response_model=EquipmentCard)

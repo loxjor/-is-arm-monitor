@@ -10,9 +10,11 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "konva": "^9.3.14"
+    "konva": "^9.3.14",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
+    "@types/qrcode": "^1.5.5",
     "typescript": "^5.5.4",
     "vite": "^5.4.2",
     "vitest": "^2.1.9"

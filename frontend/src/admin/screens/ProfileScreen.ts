@@ -1,10 +1,12 @@
 import { SpecRow, SpecTile } from '../../design/components';
-import { api } from '../api/client';
+import { ApiError, api } from '../api/client';
 import type { EquipmentListItem, PersonBrief, Profile } from '../api/types';
 import { can } from '../auth';
 import { statusBadge } from '../labels';
 import { dash, h, type Child } from '../ui/dom';
-import { errorMessage } from '../ui/toast';
+import { Form } from '../ui/Form';
+import { Modal } from '../ui/Modal';
+import { errorMessage, toast } from '../ui/toast';
 import type { Screen } from './Screen';
 
 function facts(rows: [string, Child][]): HTMLElement {
@@ -57,6 +59,38 @@ export class ProfileScreen implements Screen {
     }
   }
 
+  /** Телефон и e-mail; ФИО, должность и подразделение задаёт администратор. */
+  private editContacts(profile: Profile): void {
+    const form = new Form(
+      [
+        { name: 'phone', label: 'Телефон', kind: 'text', maxLength: 20 },
+        { name: 'email', label: 'E-mail', kind: 'text', maxLength: 150, placeholder: 'name@example.ru' },
+      ],
+      { phone: profile.person.phone, email: profile.person.email },
+    );
+    new Modal('Мои контакты', form.element, [
+      { label: 'Отмена', onClick: () => undefined },
+      {
+        label: 'Сохранить',
+        kind: 'primary',
+        onClick: async () => {
+          const values = form.getValues();
+          if (!values) return false;
+          try {
+            this.render(await api.put<Profile>('/profile', values));
+            toast('Контакты сохранены');
+            return true;
+          } catch (error) {
+            if (error instanceof ApiError) form.showError(error.message, error.fieldErrors);
+            else form.showError('Не удалось сохранить');
+            return false;
+          }
+        },
+      },
+    ]).open();
+    void form.ready.then(() => form.focusFirst());
+  }
+
   private render(profile: Profile): void {
     const { person, department, head } = profile;
     const territory = profile.territories.length
@@ -75,18 +109,26 @@ export class ProfileScreen implements Screen {
         ),
       ),
       h('div', { class: 'cards' },
-        h('section', { class: 'card' }, h('h2', null, 'Сотрудник'), facts([
-          ['ФИО', person.full_name],
-          ['Должность', person.position],
-          ['Телефон', dash(person.phone)],
-          ['E-mail', dash(person.email)],
-          ['МОЛ', profile.is_mol ? 'Да' : 'Нет'],
-          ['Учётная запись', `${profile.login} (${profile.role_name})`],
-        ])),
+        h('section', { class: 'card' },
+          h('div', { class: 'section-head' },
+            h('h2', null, 'Сотрудник'),
+            h('div', { class: 'actions' },
+              h('button', { type: 'button', class: 'arm-btn arm-btn-light', onclick: () => this.editContacts(profile) },
+                'Изменить контакты'),
+            ),
+          ),
+          facts([
+            ['ФИО', person.full_name],
+            ['Должность', person.position],
+            ['Телефон', dash(person.phone)],
+            ['E-mail', dash(person.email)],
+            ['МОЛ', profile.is_mol ? 'Да' : 'Нет'],
+            ['Учётная запись', `${profile.login} (${profile.role_name})`],
+          ]),
+        ),
         h('section', { class: 'card' }, h('h2', null, 'Подразделение'), facts([
           ['Отдел', department.name],
           ['Входит в', dash(department.parent_name)],
-          ['Телефон отдела', dash(department.phone)],
           ['Руководитель', head ? h('div', null, h('div', null, head.full_name), h('div', { class: 'muted small' }, head.position), contacts(head)) : '—'],
         ])),
         h('section', { class: 'card' }, h('h2', null, 'Территория'), h('div', null, territory)),

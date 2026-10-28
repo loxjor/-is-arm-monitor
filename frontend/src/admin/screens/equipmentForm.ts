@@ -1,6 +1,6 @@
 import { ApiError, api } from '../api/client';
-import type { EquipmentCard, Scalar } from '../api/types';
-import { catalogOptions, loadCatalog } from '../lookups';
+import type { CatalogRecord, EquipmentCard, Scalar } from '../api/types';
+import { catalogOptions, invalidateCatalog, loadCatalog } from '../lookups';
 import { Form, type FieldSpec } from '../ui/Form';
 import { Modal } from '../ui/Modal';
 import { h } from '../ui/dom';
@@ -22,10 +22,31 @@ const SCAN_MODE_CHOICES = [
   { value: 'duplex_feeder', label: 'Потоковая двусторонняя' },
 ];
 
-const names = (records: Record<string, Scalar>[]) => [...new Set(records.map((r) => String(r.name)))].sort();
+type Values = Record<string, Scalar>;
 
-function buildFields(typeGroups: Map<number, SpecGroup[]>): FieldSpec[] {
-  const has = (group: SpecGroup) => (values: Record<string, Scalar>) =>
+const sameName = (a: Scalar, b: Scalar) => String(a ?? '').trim().toLowerCase() === String(b ?? '').trim().toLowerCase();
+
+/** Характеристики, которые подставляются при выборе уже известной модели. */
+const SPEC_FIELDS = [
+  'cpu', 'ram_gb', 'storage_gb', 'diagonal_inch', 'resolution', 'connection_type',
+  'is_color', 'cartridge_type', 'drum_type', 'scan_modes',
+];
+
+/** Модели выбранного производителя в выбранном типе: модель — только в рамках производителя. */
+function modelsOf(models: CatalogRecord[], manufacturers: CatalogRecord[], values: Values): CatalogRecord[] {
+  const manufacturer = manufacturers.find((m) => sameName(m.name, values.manufacturer_name));
+  if (!manufacturer) return [];
+  return models.filter(
+    (m) => m.manufacturer_id === manufacturer.manufacturer_id && Number(m.type_id) === Number(values.type_id),
+  );
+}
+
+function buildFields(
+  typeGroups: Map<number, SpecGroup[]>,
+  manufacturers: CatalogRecord[],
+  models: CatalogRecord[],
+): FieldSpec[] {
+  const has = (group: SpecGroup) => (values: Values) =>
     typeGroups.get(Number(values.type_id))?.includes(group) ?? false;
 
   return [
@@ -33,9 +54,10 @@ function buildFields(typeGroups: Map<number, SpecGroup[]>): FieldSpec[] {
       options: () => catalogOptions('equipment-types') },
     { name: 'inventory_no', label: 'Инвентарный номер', kind: 'text', required: true, maxLength: 20, placeholder: 'ВТ-000000' },
     { name: 'manufacturer_name', label: 'Производитель', kind: 'text', required: true, maxLength: 50,
-      suggestions: async () => names(await loadCatalog('manufacturers')) },
+      suggestions: () => manufacturers.map((m) => String(m.name)).sort((a, b) => a.localeCompare(b, 'ru')) },
     { name: 'model_name', label: 'Модель', kind: 'text', required: true, maxLength: 150,
-      suggestions: async () => names(await loadCatalog('equipment-models')) },
+      suggestions: (values) =>
+        modelsOf(models, manufacturers, values).map((m) => String(m.name)).sort((a, b) => a.localeCompare(b, 'ru')) },
     { name: 'serial_no', label: 'Серийный номер', kind: 'text', maxLength: 50 },
 
     // Системный блок
@@ -66,7 +88,6 @@ function buildFields(typeGroups: Map<number, SpecGroup[]>): FieldSpec[] {
     { name: 'os_id', label: 'Операционная система', kind: 'select', options: () => catalogOptions('operating-systems'),
       visible: has('pc') },
     { name: 'hostname', label: 'Сетевое имя', kind: 'text', maxLength: 50 },
-    { name: 'ip_address', label: 'IP-адрес', kind: 'text', maxLength: 20 },
     { name: 'commissioned_on', label: 'Дата ввода в эксплуатацию', kind: 'date' },
     { name: 'book_value', label: 'Балансовая стоимость, ₽', kind: 'decimal', min: 0 },
   ];
@@ -77,11 +98,15 @@ function buildFields(typeGroups: Map<number, SpecGroup[]>): FieldSpec[] {
  * onSaved получает сохранённую карточку.
  */
 export async function openEquipmentForm(card: EquipmentCard | null, onSaved: (saved: EquipmentCard) => void): Promise<void> {
-  const types = await loadCatalog('equipment-types');
+  const [types, manufacturers, models] = await Promise.all([
+    loadCatalog('equipment-types'),
+    loadCatalog('manufacturers'),
+    loadCatalog('equipment-models'),
+  ]);
   const typeGroups = new Map<number, SpecGroup[]>(
     types.map((t) => [Number(t.type_id), TYPE_GROUPS[String(t.name).trim().toLowerCase()] ?? ['pc']]),
   );
-  const fields = buildFields(typeGroups);
+  const fields = buildFields(typeGroups, manufacturers, models);
 
   const initial: Record<string, Scalar> = {};
   if (card) {
@@ -90,6 +115,27 @@ export async function openEquipmentForm(card: EquipmentCard | null, onSaved: (sa
     }
   }
   const form = new Form(fields, initial);
+
+  // Смена типа или производителя сбрасывает модель, если такой у них нет; выбор известной модели
+  // подставляет характеристики, заданные при первой постановке на учёт этой модели.
+  let appliedModelId = card?.model_id ?? null;
+  form.element.addEventListener('change', (event) => {
+    const name = (event.target as HTMLInputElement).name;
+    const values = form.currentValues();
+    const model = modelsOf(models, manufacturers, values).find((m) => sameName(m.name, values.model_name));
+    if ((name === 'type_id' || name === 'manufacturer_name') && values.model_name !== null && !model) {
+      form.setValues({ model_name: null });
+      appliedModelId = null;
+    }
+    if (name !== 'model_name' || !model || Number(model.model_id) === appliedModelId) return;
+    const modelId = Number(model.model_id);
+    appliedModelId = modelId;
+    void api.get<Record<string, Scalar>>(`/equipment/models/${modelId}/specs`).then((specs) => {
+      // Модель могли сменить, пока шёл запрос; пустые характеристики не затирают уже введённое.
+      if (appliedModelId !== modelId || SPEC_FIELDS.every((field) => specs[field] === null)) return;
+      form.setValues(Object.fromEntries(SPEC_FIELDS.map((field) => [field, specs[field] ?? null])));
+    }).catch(() => undefined);
+  });
   const note = card
     ? null
     : h('p', { class: 'muted' }, 'Оборудование ставится на учёт со статусом «На складе». Размещение на рабочем месте — через назначение.');
@@ -106,6 +152,9 @@ export async function openEquipmentForm(card: EquipmentCard | null, onSaved: (sa
           const saved = card
             ? await api.put<EquipmentCard>(`/equipment/${card.equipment_id}`, values)
             : await api.post<EquipmentCard>('/equipment', values);
+          // Производитель и модель могли быть заведены этой формой.
+          invalidateCatalog('manufacturers');
+          invalidateCatalog('equipment-models');
           onSaved(saved);
           return true;
         } catch (error) {

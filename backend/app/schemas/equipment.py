@@ -69,6 +69,21 @@ class EquipmentWrite(BaseModel):
         return self
 
 
+class ModelSpecs(BaseModel):
+    """Характеристики модели — как они были заданы при первой постановке на учёт такой модели."""
+
+    cpu: str | None = None
+    ram_gb: int | None = None
+    storage_gb: int | None = None
+    diagonal_inch: float | None = None
+    resolution: str | None = None
+    connection_type: str | None = None
+    is_color: bool | None = None
+    cartridge_type: str | None = None
+    drum_type: str | None = None
+    scan_modes: str | None = None
+
+
 class EquipmentListItem(BaseModel):
     model_config = _CONFIG
 

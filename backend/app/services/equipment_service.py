@@ -28,7 +28,7 @@ from app.models import (
     Room,
     Workplace,
 )
-from app.schemas.equipment import AssignmentRead, EquipmentCard, EquipmentListItem, EquipmentWrite
+from app.schemas.equipment import AssignmentRead, EquipmentCard, EquipmentListItem, EquipmentWrite, ModelSpecs
 from app.services import audit_service
 from app.services.errors import ConflictError, NotFoundError
 
@@ -355,6 +355,20 @@ def _values(db: Session, data: EquipmentWrite) -> dict:
     return values
 
 
+def model_specs(db: Session, model_id: int) -> ModelSpecs:
+    """Характеристики модели — по первой поставленной на учёт единице этой модели."""
+    model = db.get(EquipmentModel, model_id)
+    if model is None:
+        raise NotFoundError("Модель оборудования не найдена")
+    first = db.scalars(
+        select(Equipment).where(Equipment.model_id == model_id).order_by(Equipment.equipment_id).limit(1)
+    ).first()
+    if first is None:
+        return ModelSpecs()
+    allowed = _TYPE_SPECS.get(model.equipment_type.name.casefold(), _PC_SPECS)
+    return ModelSpecs(**{name: getattr(first, name) for name in allowed})
+
+
 def register(db: Session, user: AppUser, data: EquipmentWrite) -> EquipmentCard:
     """Постановка на учёт (BPMN 2.5): статус всегда «На складе»."""
     _check_references(db, data)
@@ -379,6 +393,9 @@ def update(db: Session, user: AppUser, equipment_id: int, data: EquipmentWrite) 
     _check_inventory_no_unique(db, data.inventory_no, exclude_id=equipment_id)
 
     values = _values(db, data)
+    # IP закрепляется за рабочим местом и из формы убран: не присланный — значит не тронутый.
+    if "ip_address" not in data.model_fields_set:
+        values["ip_address"] = equipment.ip_address
     changes = {
         name: {"from": getattr(equipment, name), "to": value}
         for name, value in values.items()

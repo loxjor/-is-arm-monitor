@@ -314,10 +314,11 @@ def seed_reference_data(db: Session) -> None:
     monitor = EquipmentType(name="Монитор", service_life_months=84)
     printer = EquipmentType(name="МФУ", service_life_months=60)
     db.add_all([pc, monitor, printer])
-    db.add_all([
-        EquipmentType(name="Принтер", service_life_months=60),
-        EquipmentType(name="Сканер", service_life_months=60),
-    ])
+    # «Принтер» и «Сканер» уже заводит миграция c4d8e1a7f2b6 — не дублируем.
+    existing = set(db.scalars(select(EquipmentType.name)))
+    db.add_all(
+        EquipmentType(name=name, service_life_months=60) for name in ("Принтер", "Сканер") if name not in existing
+    )
 
     aquarius = Manufacturer(name="Аквариус", country="Россия")
     iru = Manufacturer(name="iRU", country="Россия")

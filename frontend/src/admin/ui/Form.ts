@@ -28,8 +28,11 @@ export interface FieldSpec {
   options?: () => Promise<Option[]>;
   /** Для checkboxes: набор вариантов; значение поля — коды отмеченных через запятую. */
   choices?: Option[];
-  /** Для text: подсказки при вводе (список <datalist>), ввод остаётся свободным. */
-  suggestions?: () => Promise<string[]>;
+  /**
+   * Для text: выпадающий список с поиском по вводу. Варианты считаются по текущим значениям формы
+   * (список может зависеть от других полей); если введённого значения в списке нет, предлагается добавить его.
+   */
+  suggestions?: (values: Record<string, Scalar>) => string[];
   /** Поле показывается, пока функция возвращает true; скрытое поле не проверяется и отдаёт null. */
   visible?: (values: Record<string, Scalar>) => boolean;
 }
@@ -80,7 +83,7 @@ export class Form {
           'label',
           { class: 'field' },
           h('span', { class: 'field-label' }, field.label, field.required ? h('span', { class: 'req' }, ' *') : null),
-          control,
+          field.suggestions ? this.createCombo(field, control as HTMLInputElement) : control,
           field.hint ? h('span', { class: 'field-hint' }, field.hint) : null,
           error,
         );
@@ -93,6 +96,70 @@ export class Form {
     this.ready = Promise.all(loading).then(() => this.refreshVisibility());
     this.element.addEventListener('input', () => this.refreshVisibility());
     this.element.addEventListener('change', () => this.refreshVisibility());
+  }
+
+  /** Поле ввода с выпадающим списком: фильтр по набранному, «Добавить …» для нового значения. */
+  private createCombo(field: FieldSpec, input: HTMLInputElement): HTMLElement {
+    const list = h('ul', { class: 'combo-list', role: 'listbox', hidden: true });
+    let items: HTMLElement[] = [];
+    let active = -1;
+
+    const close = () => {
+      list.hidden = true;
+      active = -1;
+    };
+    const choose = (text: string) => {
+      input.value = text;
+      close();
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const highlight = (index: number) => {
+      active = items.length ? (index + items.length) % items.length : -1;
+      items.forEach((item, i) => item.classList.toggle('active', i === active));
+      items[active]?.scrollIntoView({ block: 'nearest' });
+    };
+    const open = () => {
+      const typed = input.value.trim();
+      const wanted = typed.toLowerCase();
+      const variants = field.suggestions!(this.snapshot());
+      const shown = variants.filter((text) => text.toLowerCase().includes(wanted));
+      const texts = typed && !variants.some((text) => text.toLowerCase() === wanted)
+        ? [...shown, `Добавить «${typed}»`]
+        : shown;
+      items = texts.map((text, i) => {
+        const adding = i === shown.length && texts.length > shown.length;
+        return h('li', {
+          role: 'option',
+          class: adding ? 'combo-add' : null,
+          // mousedown, а не click: иначе поле потеряет фокус и список закроется раньше выбора
+          onmousedown: (event) => {
+            event.preventDefault();
+            choose(adding ? typed : text);
+          },
+        }, text);
+      });
+      list.replaceChildren(...items);
+      list.hidden = items.length === 0;
+      active = -1;
+    };
+
+    input.addEventListener('focus', open);
+    input.addEventListener('input', open);
+    input.addEventListener('blur', close);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        if (list.hidden) open();
+        highlight(active + (event.key === 'ArrowDown' ? 1 : -1));
+        event.preventDefault();
+      } else if (event.key === 'Enter' && !list.hidden && active >= 0) {
+        items[active].dispatchEvent(new MouseEvent('mousedown', { cancelable: true }));
+        event.preventDefault();
+      } else if (event.key === 'Escape' && !list.hidden) {
+        close();
+        event.stopPropagation();
+      }
+    });
+    return h('div', { class: 'combo' }, input, list);
   }
 
   /** Группа чекбоксов; скрытое поле хранит отмеченные коды через запятую. */
@@ -162,7 +229,6 @@ export class Form {
           type: 'text',
           maxlength: field.maxLength,
           placeholder: field.placeholder,
-          list: field.suggestions ? `dl-${field.name}` : null,
           autocomplete: field.suggestions ? 'off' : null,
         });
     }
@@ -175,20 +241,35 @@ export class Form {
         control.append(h('option', { value: option.value }, option.label));
       }
     }
-    if (field.kind === 'text' && field.suggestions) {
-      const list = h('datalist', { id: `dl-${field.name}` });
-      for (const text of await field.suggestions()) list.append(h('option', { value: text }));
-      control.after(list);
-    }
     if (control instanceof HTMLInputElement && control.type === 'checkbox') {
       control.checked = value === true;
     } else if (value !== null) {
-      control.value = String(value);
-      if (field.kind === 'checkboxes') {
-        const codes = String(value).split(',');
-        for (const box of this.boxes.get(field.name) ?? []) box.checked = codes.includes(box.value);
-      }
+      this.setControl(field, control, value);
     }
+  }
+
+  private setControl(field: FieldSpec, control: Control, value: Scalar): void {
+    control.value = value === null ? '' : String(value);
+    if (field.kind === 'checkboxes') {
+      const codes = control.value.split(',');
+      for (const box of this.boxes.get(field.name) ?? []) box.checked = codes.includes(box.value);
+    }
+  }
+
+  /** Программно задаёт значения полей (например, подставляет характеристики модели). */
+  setValues(values: Record<string, Scalar>): void {
+    for (const field of this.fields) {
+      const control = this.controls.get(field.name);
+      if (!control || !(field.name in values)) continue;
+      if (control instanceof HTMLInputElement && control.type === 'checkbox') control.checked = values[field.name] === true;
+      else this.setControl(field, control, values[field.name]);
+    }
+    this.refreshVisibility();
+  }
+
+  /** Текущие значения полей без проверки обязательности. */
+  currentValues(): Record<string, Scalar> {
+    return this.snapshot();
   }
 
   focusFirst(): void {

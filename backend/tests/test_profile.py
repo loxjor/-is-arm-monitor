@@ -19,6 +19,42 @@ def test_employee_profile(client: TestClient) -> None:
     assert profile["open_tickets"] == 1
 
 
+def test_update_own_contacts(client: TestClient) -> None:
+    headers = login(client, "employee")
+    response = client.put("/api/v1/profile", headers=headers,
+                          json={"phone": " +7 900 111-22-33 ", "email": "anna@example.ru"})
+    assert response.status_code == 200, response.text
+    person = response.json()["person"]
+    assert (person["phone"], person["email"]) == ("+7 900 111-22-33", "anna@example.ru")
+    # ФИО и должность через профиль не меняются, пустое значение очищает контакт.
+    cleared = client.put("/api/v1/profile", headers=headers,
+                         json={"phone": "", "email": None, "full_name": "Другое", "position": "Другая"}).json()["person"]
+    assert cleared["phone"] is None and cleared["email"] is None
+    assert cleared["full_name"] == "Смирнова Анна Викторовна" and cleared["position"] == "Ведущий специалист"
+    assert client.put("/api/v1/profile", headers=headers, json={"email": "не-почта"}).status_code == 422
+
+
+def test_change_own_password(client: TestClient) -> None:
+    from tests.conftest import SEED_PASSWORD
+
+    headers = login(client, "employee")
+    wrong = client.post("/api/v1/profile/password", headers=headers,
+                        json={"current_password": "wrong-password", "new_password": "new-password-1"})
+    assert wrong.status_code == 400
+    same = client.post("/api/v1/profile/password", headers=headers,
+                       json={"current_password": SEED_PASSWORD, "new_password": SEED_PASSWORD})
+    assert same.status_code == 400
+    short = client.post("/api/v1/profile/password", headers=headers,
+                        json={"current_password": SEED_PASSWORD, "new_password": "short"})
+    assert short.status_code == 422
+
+    ok = client.post("/api/v1/profile/password", headers=headers,
+                     json={"current_password": SEED_PASSWORD, "new_password": "new-password-1"})
+    assert ok.status_code == 204
+    assert client.post("/api/v1/auth/login", json={"login": "employee", "password": SEED_PASSWORD}).status_code == 401
+    login(client, "employee", "new-password-1")
+
+
 def test_profile_without_equipment(client: TestClient) -> None:
     # У администратора ИС нет выданной техники — территория пуста, но профиль строится.
     profile = client.get("/api/v1/profile", headers=login(client, "admin")).json()

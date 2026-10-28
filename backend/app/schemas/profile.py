@@ -1,6 +1,28 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.equipment import EquipmentListItem
+from app.schemas.user import _check_password_bytes
+
+
+class ProfileUpdate(BaseModel):
+    """Свои контакты. ФИО, должность, подразделение и роль задаёт администратор."""
+
+    phone: str | None = Field(default=None, max_length=20)
+    email: str | None = Field(default=None, max_length=150, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+    @field_validator("phone", "email", mode="before")
+    @classmethod
+    def _blank_is_none(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
+
+class PasswordChange(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, description="Не менее 8 символов, не более 72 байт")
+
+    _password_bytes = field_validator("new_password")(_check_password_bytes)
 
 
 class PersonBrief(BaseModel):
