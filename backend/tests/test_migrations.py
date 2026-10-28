@@ -121,7 +121,8 @@ def test_floors_migration_keeps_first_floor_on_downgrade(
             )
         )
 
-    command.downgrade(config, "-1")
+    # Ревизия перед миграцией этажей: «-1» зависит от того, какая миграция сейчас последняя.
+    command.downgrade(config, "3aa18ca7867a")
 
     with engine.connect() as connection:
         scene_raw, version = connection.execute(

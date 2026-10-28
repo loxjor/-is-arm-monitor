@@ -1,7 +1,7 @@
 """equipment type specs
 
 Revision ID: c4d8e1a7f2b6
-Revises: 3aa18ca7867a
+Revises: c5e1f0a2b7d8
 Create Date: 2026-10-28 12:00:00.000000
 
 Характеристики оборудования по типу (монитор, принтер, сканер) и типы
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'c4d8e1a7f2b6'
-down_revision: Union[str, None] = '3aa18ca7867a'
+down_revision: Union[str, None] = 'c5e1f0a2b7d8'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
