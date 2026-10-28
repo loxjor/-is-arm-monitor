@@ -75,3 +75,35 @@ export function polygonsOverlap(a: readonly Point[], b: readonly Point[]): boole
   }
   return pointInPolygon(a[0]!, b) || pointInPolygon(b[0]!, a);
 }
+
+export interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Охватывающий прямоугольник (AABB) многоугольника. */
+export function boundsOf(points: readonly Point[]): Bounds {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Предфильтр для polygonsOverlap: false — только если прямоугольники строго
+ * разнесены, и тогда многоугольники заведомо не пересекаются и не вложены.
+ * Касание по границе считается возможным перекрытием — окончательный ответ
+ * за точной проверкой, так что результат deskCollides не меняется.
+ */
+export function boundsMayOverlap(a: Bounds, b: Bounds): boolean {
+  return !(a.maxX < b.minX || b.maxX < a.minX || a.maxY < b.minY || b.maxY < a.minY);
+}

@@ -11,6 +11,9 @@ body.editor-mode {
     overflow: hidden;
     background: var(--ground);
     z-index: 0;
+    /* Жесты на холсте — его собственные (сдвиг, зум двумя пальцами):
+       браузер не должен ни прокручивать, ни масштабировать страницу. */
+    touch-action: none;
 }
 
 .top-bar,
@@ -105,7 +108,9 @@ body.editor-mode {
     gap: var(--space-2);
 }
 
-.settings-group[hidden] {
+.settings-group[hidden],
+#opening-door-actions[hidden],
+#opening-kind-row .arm-chip[hidden] {
     display: none;
 }
 
@@ -332,17 +337,61 @@ body.editor-mode {
 
 /* ─── Узкий экран и печать ──────────────────────────────────── */
 
+/* Телефон: каждая панель — одна строка с горизонтальной прокруткой. Переносы
+   складывали панели в пять-шесть рядов, и под них уходила треть экрана —
+   а с кнопками под палец (44px, styles/base.css) ушла бы половина. */
 @media (max-width: 720px) {
+    .top-bar,
+    .left-toolbar,
+    .bottom-panel,
+    .top-bar .chip-row,
+    .bottom-panel .chip-row {
+        flex-wrap: nowrap;
+    }
+
+    .top-bar,
+    .left-toolbar,
+    .bottom-panel {
+        left: var(--space-2);
+        right: var(--space-2);
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+    }
+
+    .top-bar > *,
+    .left-toolbar > *,
+    .bottom-panel > *,
+    .chip-row > * {
+        flex: none;
+    }
+
+    .top-bar {
+        padding: var(--space-2) var(--space-3);
+    }
+
+    .top-bar .plan-title {
+        max-width: 40vw;
+    }
+
     .left-toolbar {
         top: auto;
-        bottom: 132px;
+        bottom: 76px;
         flex-direction: row;
-        flex-wrap: wrap;
-        right: var(--space-2);
+        padding: var(--space-2);
+    }
+
+    .bottom-panel {
+        transform: none;
+        width: auto;
+        max-width: none;
+        justify-content: flex-start;
+        gap: var(--space-4);
+        padding: var(--space-2) var(--space-3);
     }
 
     .tool-settings {
-        top: 120px;
+        top: 76px;
         left: var(--space-2);
     }
 
@@ -355,4 +404,335 @@ body.editor-mode {
     .top-bar, .left-toolbar, .bottom-panel, .tool-settings, .canvas-hint, .plan-picker {
         display: none !important;
     }
+}
+
+/* ─── Правка кабинета (RoomEditor) — поверх холста, у помещения ── */
+
+.room-editor {
+    position: absolute;
+    z-index: 5;
+    width: 260px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--ground-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+}
+
+.room-editor[hidden] {
+    display: none;
+}
+
+.room-editor-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    color: var(--ink-muted);
+}
+
+.room-editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+}
+
+/* ─── Этажи и масштаб (FloorPicker) — вертикальная панель у правого края ── */
+
+.floor-rail {
+    position: absolute;
+    z-index: 10;
+    right: var(--space-2);
+    top: 50%;
+    transform: translateY(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.floor-rail-floors,
+.floor-rail-zoom,
+.floor-rail-building {
+    background: var(--ground-deep);
+    border-radius: var(--radius-md);
+}
+
+.floor-rail-floors,
+.floor-rail-zoom {
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-1);
+}
+
+.floor-rail-floors:empty {
+    display: none;
+}
+
+.floor-rail-button {
+    width: 36px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.floor-rail-button:hover {
+    background: var(--surface-glass);
+}
+
+.floor-rail-button[aria-pressed="true"] {
+    background: var(--ink);
+    color: var(--on-ink);
+}
+
+.floor-rail-zoom .floor-rail-button {
+    font-size: 20px;
+    font-weight: 400;
+}
+
+.floor-rail-building {
+    width: 44px;
+    height: 40px;
+}
+
+.floor-rail-building svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+/* Форма нового этажа — слева от панели, у значка здания. */
+.floor-rail-panel {
+    position: absolute;
+    top: 0;
+    right: calc(100% + var(--space-2));
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--ground-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+}
+
+.floor-rail-panel[hidden],
+.floor-rail-panel .arm-btn[hidden] {
+    display: none;
+}
+
+.floor-rail-panel select {
+    width: 100%;
+}
+
+.floor-picker-option {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    font-size: 13px;
+    line-height: 18px;
+    cursor: pointer;
+}
+
+.floor-picker-option input {
+    margin-top: 2px;
+}
+
+/* Кнопки-значки (Отменить / Повторить): штрих — цветом текста кнопки. */
+.icon-btn {
+    display: inline-grid;
+    place-items: center;
+    padding-inline: var(--space-2);
+}
+
+.icon-btn svg {
+    width: 18px;
+    height: 18px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* ─── Калибровка подложки (CalibrationPanel) — сверху по центру холста ── */
+
+.calibration-panel {
+    position: absolute;
+    z-index: 15;
+    top: 72px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(420px, calc(100% - 2 * var(--space-4)));
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    background: var(--ground-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+}
+
+.calibration-panel[hidden],
+.calibration-form[hidden] {
+    display: none;
+}
+
+.calibration-text {
+    margin: 0;
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--ink-muted);
+}
+
+.calibration-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.calibration-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    font-size: 11px;
+    color: var(--ink-muted);
+}
+
+.calibration-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+}
+
+.calibration-panel > .arm-btn {
+    align-self: flex-start;
+}
+
+/* ─── Меню подложки (BackgroundMenu) — над кнопкой в нижней панели ── */
+
+.background-menu {
+    position: relative;
+}
+
+.background-menu-panel {
+    position: absolute;
+    bottom: calc(100% + var(--space-2));
+    left: 0;
+    z-index: 20;
+    width: 240px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    background: var(--ground-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+}
+
+.background-menu-panel[hidden] {
+    display: none;
+}
+
+.background-menu-panel > .arm-btn {
+    justify-content: flex-start;
+    text-align: left;
+}
+
+.background-menu-panel .arm-btn[aria-pressed="true"] {
+    background: var(--ink);
+    color: var(--on-ink);
+}
+
+.background-menu-opacity {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-1) var(--space-2);
+    align-items: center;
+    font-size: 11px;
+    color: var(--ink-muted);
+}
+
+.background-menu-opacity input {
+    grid-column: 1;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: none;
+}
+
+.background-menu-opacity span:last-child {
+    grid-column: 2;
+    font-weight: 700;
+    color: var(--ink);
+}
+
+/* ─── Меню вида лестницы (StairsMenu) — справа от кнопки «Лестница» ── */
+
+.stairs-menu {
+    position: fixed;
+    z-index: 30;
+    width: 300px;
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: var(--space-1) 0;
+    background: var(--ground-deep);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+}
+
+.stairs-menu[hidden],
+.stairs-menu-sub[hidden] {
+    display: none;
+}
+
+.stairs-menu-item,
+.stairs-menu-subitem {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    font-size: 14px;
+    text-align: left;
+    padding: var(--space-2) var(--space-3);
+    cursor: pointer;
+}
+
+.stairs-menu-subitem {
+    padding-left: var(--space-6);
+    font-size: 13px;
+    color: var(--ink-muted);
+}
+
+.stairs-menu-item:hover,
+.stairs-menu-subitem:hover {
+    background: var(--surface-glass);
+    color: var(--ink);
+}
+
+.stairs-menu-group[aria-expanded="true"] .stairs-menu-chevron {
+    transform: rotate(180deg);
+}
+
+#input-fixture-variant[hidden] {
+    display: none;
 }

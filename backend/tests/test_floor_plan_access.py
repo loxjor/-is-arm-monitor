@@ -12,7 +12,7 @@ def _plan_payload(client: TestClient, headers: dict[str, str]) -> dict:
         "width_cm": plan["width_cm"],
         "height_cm": plan["height_cm"],
         "background_image_url": plan["background_image_url"],
-        "scene": {"version": 2, "nodes": plan["scene"]["nodes"], "segments": plan["scene"]["segments"]},
+        "scene": {"version": 4, "floors": plan["scene"]["floors"]},
         "workspaces": [{k: v for k, v in w.items() if k != "id"} for w in plan["workspaces"]],
     }
 

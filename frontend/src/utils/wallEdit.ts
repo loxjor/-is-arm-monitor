@@ -103,3 +103,88 @@ export function pointAtDistance(
   }
   return { x: fixed.x + dir.x * length, y: fixed.y + dir.y * length };
 }
+
+/** Грань конкретной стены — вход mergeContinuousFaces; key различает стену и сторону. */
+export interface KeyedFace {
+  key: string;
+  face: FaceDimension;
+}
+
+/** Непрерывная грань из одной или нескольких подряд идущих граней; keys — в порядке входа. */
+export interface FaceRun {
+  keys: string[];
+  face: FaceDimension;
+}
+
+// Точки стыка соседних граней получаются из одного и того же пересечения
+// (см. wedgeVertices), так что совпадают с точностью до float-шума.
+const JOINT_EPS = 0.01;
+const PARALLEL_EPS = 1e-6;
+
+/**
+ * Склеивает грани, которые продолжают друг друга без излома и разрыва: стена,
+ * разбитая узлом (T-стык, точка на прямой), снаружи остаётся одной гранью и
+ * должна мериться целиком. Грани соседей считаются одной, если у них общая
+ * вершина и одна и та же нормаль наружу — тогда они на одной прямой и по
+ * одну сторону стены. Со стороны примыкания грань в узле прерывается
+ * (вершины разные), там размеры остаются по сегментам; то же при смене
+ * толщины — грань идёт ступенькой.
+ */
+export function mergeContinuousFaces(faces: readonly KeyedFace[]): FaceRun[] {
+  const parent = faces.map((_, index) => index);
+  const find = (index: number): number => {
+    while (parent[index] !== index) {
+      parent[index] = parent[parent[index]];
+      index = parent[index];
+    }
+    return index;
+  };
+  const near = (a: WallEndpoint, b: WallEndpoint): boolean =>
+    Math.abs(a.x - b.x) < JOINT_EPS && Math.abs(a.y - b.y) < JOINT_EPS;
+
+  for (let i = 0; i < faces.length; i++) {
+    for (let j = i + 1; j < faces.length; j++) {
+      const a = faces[i].face;
+      const b = faces[j].face;
+      const sameOutward = a.outward.x * b.outward.x + a.outward.y * b.outward.y > 1 - PARALLEL_EPS;
+      const touching = near(a.from, b.from) || near(a.from, b.to) || near(a.to, b.from) || near(a.to, b.to);
+      if (sameOutward && touching) {
+        parent[find(j)] = find(i);
+      }
+    }
+  }
+
+  const groups = new Map<number, number[]>();
+  faces.forEach((_, index) => {
+    const root = find(index);
+    const group = groups.get(root);
+    if (group) {
+      group.push(index);
+    } else {
+      groups.set(root, [index]);
+    }
+  });
+
+  return [...groups.values()].map((members) => {
+    const first = faces[members[0]].face;
+    if (members.length === 1) {
+      return { keys: [faces[members[0]].key], face: first };
+    }
+    // Крайние точки вдоль первой грани — так сохраняется её порядок from → to.
+    const along = { x: first.to.x - first.from.x, y: first.to.y - first.from.y };
+    const project = (point: WallEndpoint): number => point.x * along.x + point.y * along.y;
+    let from = first.from;
+    let to = first.to;
+    members.forEach((index) => {
+      const { face } = faces[index];
+      [face.from, face.to].forEach((point) => {
+        if (project(point) < project(from)) from = point;
+        if (project(point) > project(to)) to = point;
+      });
+    });
+    return {
+      keys: members.map((index) => faces[index].key),
+      face: { ...first, from, to, length: Math.hypot(to.x - from.x, to.y - from.y) },
+    };
+  });
+}

@@ -1,5 +1,5 @@
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 
 from app.models.floor_plan import FloorPlan
 from app.models.workspace import Workspace
@@ -9,7 +9,9 @@ from app.schemas.workspace import WorkspaceCreate, WorkspaceRead
 
 
 def list_floor_plans(db: Session) -> list[FloorPlan]:
-    return list(db.execute(select(FloorPlan).order_by(FloorPlan.updated_at.desc())).scalars())
+    # Списку нужна только краткая карточка (FloorPlanSummary) — документ сцены не читаем.
+    query = select(FloorPlan).options(defer(FloorPlan.scene)).order_by(FloorPlan.updated_at.desc())
+    return list(db.execute(query).scalars())
 
 
 def get_floor_plan(db: Session, floor_plan_id: int) -> FloorPlan | None:
@@ -17,6 +19,10 @@ def get_floor_plan(db: Session, floor_plan_id: int) -> FloorPlan | None:
 
 
 def to_read(floor_plan: FloorPlan) -> FloorPlanRead:
+    scene = upgrade_scene(floor_plan.scene, floor_plan.scene_version)
+    # Места без этажа (сохранены до этажей) — на первом этаже плана.
+    first_floor_id = scene.floors[0].id if scene.floors else None
+    workspaces = [WorkspaceRead.model_validate(workspace) for workspace in floor_plan.workspaces]
     return FloorPlanRead(
         id=floor_plan.id,
         name=floor_plan.name,
@@ -25,8 +31,11 @@ def to_read(floor_plan: FloorPlan) -> FloorPlanRead:
         background_image_url=floor_plan.background_image_url,
         created_at=floor_plan.created_at,
         updated_at=floor_plan.updated_at,
-        scene=upgrade_scene(floor_plan.scene, floor_plan.scene_version),
-        workspaces=[WorkspaceRead.model_validate(workspace) for workspace in floor_plan.workspaces],
+        scene=scene,
+        workspaces=[
+            workspace if workspace.floor_id else workspace.model_copy(update={"floor_id": first_floor_id})
+            for workspace in workspaces
+        ],
     )
 
 

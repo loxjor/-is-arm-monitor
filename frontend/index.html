@@ -12,6 +12,9 @@
     <!-- Холст -->
     <div id="editor-canvas"></div>
 
+    <!-- Справа: этажи и масштаб (FloorPicker) -->
+    <div id="floor-picker-host"></div>
+
     <!-- Верх: план и действия с ним -->
     <header class="top-bar">
         <a class="editor-brand" href="/admin.html"><span class="arm-tree-mark"></span>АРМ Монитор</a>
@@ -29,8 +32,10 @@
         <button class="arm-chip" id="btn-cursor" type="button" aria-pressed="true">Выбрать</button>
         <button class="arm-chip" id="btn-wall" type="button" aria-pressed="false">Стена</button>
         <button class="arm-chip" id="btn-desk" type="button" aria-pressed="false">Рабочее место</button>
-        <button class="arm-chip" id="btn-window" type="button" aria-pressed="false" disabled title="Окна — в разработке">Окно</button>
-        <button class="arm-chip" id="btn-door" type="button" aria-pressed="false" disabled title="Двери — в разработке">Дверь</button>
+        <button class="arm-chip" id="btn-window" type="button" aria-pressed="false">Окно</button>
+        <button class="arm-chip" id="btn-door" type="button" aria-pressed="false">Дверь</button>
+        <button class="arm-chip" id="btn-stairs" type="button" aria-pressed="false">Лестница</button>
+        <button class="arm-chip" id="btn-elevator" type="button" aria-pressed="false">Лифт</button>
     </nav>
 
     <!-- Настройки инструмента / выделенного объекта -->
@@ -61,6 +66,36 @@
             <input type="number" class="setting-value" id="input-selected-thickness" min="2" max="60" step="1">
         </div>
 
+        <!-- Окно / дверь: параметры будущих проёмов инструмента или выделенного проёма -->
+        <div id="settings-opening" class="settings-group" hidden>
+            <div class="setting-label" id="opening-settings-title">Дверь</div>
+            <div class="chip-row" id="opening-kind-row" role="group" aria-label="Вид проёма">
+                <button class="arm-chip" type="button" data-kind="door" aria-pressed="false">Дверь</button>
+                <button class="arm-chip" type="button" data-kind="door_double" aria-pressed="false">Двустворчатая</button>
+                <button class="arm-chip" type="button" data-kind="doorway" aria-pressed="false">Проём</button>
+                <button class="arm-chip" type="button" data-kind="window" aria-pressed="false">Окно</button>
+                <button class="arm-chip" type="button" data-kind="windowway" aria-pressed="false">Без рамы</button>
+            </div>
+            <label class="setting-label" for="input-opening-width">Ширина, см</label>
+            <input type="number" class="setting-value" id="input-opening-width" step="1">
+            <div class="chip-row setting-presets" id="opening-width-presets" role="group" aria-label="Стандартная ширина"></div>
+            <div class="chip-row" id="opening-door-actions">
+                <button class="arm-btn arm-btn-light" id="btn-flip-hinge" type="button">Петли</button>
+                <button class="arm-btn arm-btn-light" id="btn-flip-swing" type="button">Открывание</button>
+            </div>
+        </div>
+
+        <!-- Выделенные лестница или лифт: размер и поворот -->
+        <div id="settings-fixture" class="settings-group" hidden>
+            <div class="setting-label" id="fixture-settings-title">Лестница</div>
+            <select id="input-fixture-variant" aria-label="Вид лестницы"></select>
+            <label class="setting-label" for="input-fixture-width" id="label-fixture-width">Ширина, см</label>
+            <input type="number" class="setting-value" id="input-fixture-width" min="30" step="5">
+            <label class="setting-label" for="input-fixture-height" id="label-fixture-height">Длина, см</label>
+            <input type="number" class="setting-value" id="input-fixture-height" min="30" step="5">
+            <button class="arm-btn arm-btn-light" id="btn-fixture-rotate" type="button">Повернуть на 90°</button>
+        </div>
+
         <!-- Выделенное рабочее место: статус -->
         <div id="settings-desk" class="settings-group" hidden>
             <div class="setting-label">Статус места</div>
@@ -78,8 +113,12 @@
     <!-- Низ -->
     <div class="bottom-panel">
         <div class="chip-row">
-            <button class="arm-btn arm-btn-light" id="btn-undo" type="button" title="Ctrl+Z">Отменить</button>
-            <button class="arm-btn arm-btn-light" id="btn-redo" type="button" disabled title="В разработке">Повторить</button>
+            <button class="arm-btn arm-btn-light icon-btn" id="btn-undo" type="button" title="Отменить (Ctrl+Z)" aria-label="Отменить">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+            </button>
+            <button class="arm-btn arm-btn-light icon-btn" id="btn-redo" type="button" title="Повторить (Ctrl+Y)" aria-label="Повторить">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
+            </button>
             <button class="arm-btn arm-btn-danger" id="btn-delete" type="button" title="Delete">Удалить</button>
         </div>
         <div class="chip-row" role="group" aria-label="Вид">
@@ -89,10 +128,7 @@
             <button class="arm-chip" id="theme-toggle" type="button" aria-pressed="false">Тёмная тема</button>
         </div>
         <div class="chip-row">
-            <label class="arm-btn arm-btn-light file-btn">
-                Подложка
-                <input type="file" id="input-background" accept="image/*">
-            </label>
+            <div id="background-menu-host"></div>
             <button class="arm-btn arm-btn-light" id="btn-center" type="button">Весь план</button>
             <span class="scale-readout t-label" id="scale-readout">100%</span>
             <button class="arm-btn arm-btn-light" id="btn-settings" type="button">План</button>

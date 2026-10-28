@@ -1,9 +1,8 @@
 import Konva from 'konva';
 import type { WallSegment } from '../types/wall';
 import { pxToCm, type Cm } from '../utils/scale';
-import { getWallHatchPattern } from '../utils/hatchPattern';
 import type { WallEndpoint } from '../utils/geometry';
-import { faceDimensions } from '../utils/wallEdit';
+import { faceDimensions, type FaceDimension } from '../utils/wallEdit';
 import { DimensionLine } from './DimensionLine';
 import { palette } from '../theme';
 
@@ -22,6 +21,12 @@ const MIN_DIMENSION_CM = 1;
  * rebuildJoints — угол не "чинится" отдельным проходом, а всегда
  * соответствует текущей геометрии графа, потому что полигон целиком
  * пересчитывается из неё же.
+ *
+ * Видимое тело стен — общий WallMass (бесшовная штриховка и контур по
+ * периметру всех стен сразу), а line здесь прозрачна и нужна для клика и
+ * перетаскивания. Сама line проявляется, только когда стену выделили
+ * (обводка accent). При перетаскивании line не едет сама: FloorPlanCanvas
+ * двигает узлы, и стена вместе с соседями перерисовывается из графа.
  *
  * Толщина — единственное, что Wall хранит сам (thicknessCm), потому что это
  * атрибут ребра, а не производная от узлов величина. Transformer на стены
@@ -56,8 +61,7 @@ export class Wall {
       id: segment.id,
       points: [],
       closed: true,
-      fillPatternRepeat: 'repeat',
-      strokeWidth: 1,
+      fill: 'transparent',
       draggable: true,
     });
 
@@ -90,13 +94,18 @@ export class Wall {
     return this.polygon;
   }
 
+  /** Левая и правая грани из последнего render() (пусто, если стена вырождена). */
+  getFaceDimensions(): FaceDimension[] {
+    return this.axisStart && this.axisEnd ? faceDimensions(this.polygon, this.axisStart, this.axisEnd) : [];
+  }
+
   /**
-   * Размеры по обеим граням из последнего render(). Отдельно от render(),
-   * потому что зависят ещё и от масштаба сцены — при зуме перерисовываются
-   * только они, полигон остаётся прежним.
+   * Размеры по граням — [левая, правая]; null скрывает размер этой стороны
+   * (грань меряется целиком на другой стене, см. mergeContinuousFaces).
+   * Отдельно от render(), потому что зависят ещё и от масштаба сцены — при
+   * зуме перерисовываются только они, полигон остаётся прежним.
    */
-  renderDimensions(scale: number): void {
-    const faces = this.axisStart && this.axisEnd ? faceDimensions(this.polygon, this.axisStart, this.axisEnd) : [];
+  renderDimensions(faces: readonly (FaceDimension | null)[], scale: number): void {
     this.faceDimensionLines.forEach((dimension, index) => {
       const face = faces[index];
       if (!face || pxToCm(face.length) < MIN_DIMENSION_CM) {
@@ -107,10 +116,8 @@ export class Wall {
     });
   }
 
-  /** Штриховка и обводка — из токенов текущей темы (стена — ink, выбранная — accent). */
   applyTheme(): void {
-    this.line.fillPatternImage(getWallHatchPattern());
-    this.line.stroke(this.selected ? palette().accent : palette().ink);
+    this.applyLook();
     this.faceDimensionLines.forEach((dimension) => dimension.applyTheme());
   }
 
@@ -125,8 +132,13 @@ export class Wall {
 
   setSelected(selected: boolean): void {
     this.selected = selected;
-    this.line.stroke(selected ? palette().accent : palette().ink);
-    this.line.strokeWidth(selected ? 2 : 1);
+    this.applyLook();
+  }
+
+  private applyLook(): void {
+    this.line.strokeEnabled(this.selected);
+    this.line.stroke(palette().accent);
+    this.line.strokeWidth(2);
   }
 
   toSegmentData(): WallSegment {

@@ -87,5 +87,5 @@ export function migrateSceneData(data: SceneData | SceneDataV1): SceneData {
     return data;
   }
   const { nodes, segments } = migrateWallsToGraph(data.walls);
-  return { version: 2, nodes, segments, workspaces: data.workspaces };
+  return { version: 2, nodes, segments, workspaces: data.workspaces, rooms: [] };
 }

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { buildSegmentPolygon, computeNodeFaceVertices } from './wallPolygon';
-import { faceDimensions, pointAtDistance, shiftAxisForOneSidedThickness } from './wallEdit';
+import {
+  faceDimensions,
+  mergeContinuousFaces,
+  pointAtDistance,
+  shiftAxisForOneSidedThickness,
+  type KeyedFace,
+} from './wallEdit';
 
 describe('faceDimensions', () => {
   it('свободная стена 100 толщиной 10 — обе грани ровно по 100 (торцы не выступают)', () => {
@@ -75,5 +81,50 @@ describe('pointAtDistance', () => {
 
   it('совпадающие точки — направления нет, null', () => {
     expect(pointAtDistance({ x: 1, y: 1 }, { x: 1, y: 1 }, 10)).toBeNull();
+  });
+});
+
+describe('mergeContinuousFaces', () => {
+  // Стена (0,0)→(200,0) разбита узлом (100,0); halfB — половина толщины правой части.
+  // tee — есть ли в узле примыкание вниз (+y, "правая" сторона) толщиной 10.
+  function splitWall(halfB: number, tee: boolean): KeyedFace[] {
+    const node = { x: 100, y: 0 };
+    const rays = [
+      { key: 'a:end', dir: { x: -1, y: 0 }, halfThickness: 5 },
+      { key: 'b:start', dir: { x: 1, y: 0 }, halfThickness: halfB },
+    ];
+    if (tee) {
+      rays.push({ key: 't:start', dir: { x: 0, y: 1 }, halfThickness: 5 });
+    }
+    const atNode = computeNodeFaceVertices(node, rays);
+    const free = (point: { x: number; y: number }, dir: { x: number; y: number }, half: number) =>
+      computeNodeFaceVertices(point, [{ key: 'k', dir, halfThickness: half }]).get('k')!;
+    const a = buildSegmentPolygon(free({ x: 0, y: 0 }, { x: 1, y: 0 }, 5), atNode.get('a:end')!);
+    const b = buildSegmentPolygon(atNode.get('b:start')!, free({ x: 200, y: 0 }, { x: -1, y: 0 }, halfB));
+    return [
+      ...faceDimensions(a, { x: 0, y: 0 }, node).map((face) => ({ key: `a:${face.side}`, face })),
+      ...faceDimensions(b, node, { x: 200, y: 0 }).map((face) => ({ key: `b:${face.side}`, face })),
+    ];
+  }
+
+  it('T-стык — наружная грань целиком, со стороны примыкания по сегментам', () => {
+    const runs = mergeContinuousFaces(splitWall(5, true));
+
+    const outer = runs.find((run) => run.keys.includes('a:right'));
+    expect(outer?.keys).toEqual(['a:right', 'b:right']);
+    expect(outer?.face.length).toBeCloseTo(200);
+    expect(runs.find((run) => run.keys.includes('a:left'))?.keys).toEqual(['a:left']);
+    expect(runs.find((run) => run.keys.includes('b:left'))?.face.length).toBeCloseTo(95);
+  });
+
+  it('узел на прямой без примыканий — обе грани целиком', () => {
+    const runs = mergeContinuousFaces(splitWall(5, false));
+
+    expect(runs).toHaveLength(2);
+    runs.forEach((run) => expect(run.face.length).toBeCloseTo(200));
+  });
+
+  it('смена толщины — грань идёт ступенькой и не склеивается', () => {
+    expect(mergeContinuousFaces(splitWall(10, false))).toHaveLength(4);
   });
 });

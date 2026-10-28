@@ -24,12 +24,15 @@ class FloorPlanCreate(FloorPlanBase):
     model_config = ConfigDict(extra="forbid")
 
     @model_validator(mode="after")
-    def unique_workspace_ids(self) -> "FloorPlanCreate":
+    def check_workspaces(self) -> "FloorPlanCreate":
         seen: set[str] = set()
+        floor_ids = set(self.scene.floor_ids())
         for workspace in self.workspaces:
             if workspace.client_id in seen:
                 raise ValueError(f"повторяющийся client_id рабочего места: {workspace.client_id!r}")
             seen.add(workspace.client_id)
+            if workspace.floor_id is not None and workspace.floor_id not in floor_ids:
+                raise ValueError(f"рабочее место {workspace.client_id!r} на неизвестном этаже")
         return self
 
 

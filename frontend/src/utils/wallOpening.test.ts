@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { WallOpening } from '../types/opening';
-import { OPENING_DEFAULTS } from '../types/opening';
+import { OPENING_DEFAULTS, OPENING_WIDTH_PRESETS } from '../types/opening';
 import { cm } from './scale';
 import {
   clampOpeningOffset,
   doorLeafGeometry,
+  normalizeOpeningOptions,
   openingAxisRange,
   openingCutPolygon,
   projectPointToSegmentOffset,
@@ -200,6 +201,19 @@ describe('doorLeafGeometry', () => {
     expect(g.arc.endAngle).toBeCloseTo(90); // вдоль +perp (0,1)
   });
 
+  it('приоткрытое на 45° полотно: конец на дуге между закрытым и открытым положением', () => {
+    const g = doorLeafGeometry(start, end, 10, make(), 45)!;
+    const tip = g.leaf[1];
+    expect(tip.x).toBeCloseTo(40 + 20 * Math.SQRT1_2);
+    expect(tip.y).toBeCloseTo(5 + 20 * Math.SQRT1_2);
+    expect(g.arc.endAngle).toBeCloseTo(45);
+    // толщина полотна — перпендикулярно ему, в сторону закрытого положения
+    const [p0, , , p3] = g.leaf;
+    expect(Math.hypot(p3.x - p0.x, p3.y - p0.y)).toBeCloseTo(4);
+    expect(p3.x - p0.x).toBeGreaterThan(0);
+    expect(p3.y - p0.y).toBeLessThan(0);
+  });
+
   it('петли у конца: петля у правого края, закрытое положение смотрит к началу', () => {
     const g = doorLeafGeometry(start, end, 10, make({ hinge: 'end' }))!;
     expect(g.hinge.x).toBeCloseTo(60);
@@ -294,5 +308,42 @@ describe('redistributeOpeningsOnSplit', () => {
 
   it('пустой список', () => {
     expect(redistributeOpeningsOnSplit([], 's1', 50, 'n1', 'n2', 50)).toEqual([]);
+  });
+});
+
+describe('normalizeOpeningOptions', () => {
+  const door = { kind: 'door' as const, width: 80, height: 210, sillHeight: 0 };
+
+  it('ширина зажимается в пределы вида и округляется', () => {
+    expect(normalizeOpeningOptions(door, { width: 400 }).width).toBe(120);
+    expect(normalizeOpeningOptions(door, { width: 72.6 }).width).toBe(73);
+  });
+
+  it('смена вида: подходящая ширина остаётся, неподходящая — стандартная для нового вида', () => {
+    expect(normalizeOpeningOptions(door, { kind: 'doorway' }).width).toBe(80);
+    expect(normalizeOpeningOptions(door, { kind: 'door_double' }).width).toBe(120);
+  });
+
+  it('у окна свой подоконник и высота, у двери подоконника нет', () => {
+    const window = normalizeOpeningOptions(door, { kind: 'window' });
+    expect(window).toEqual({ kind: 'window', width: 80, height: 150, sillHeight: 85 });
+    expect(normalizeOpeningOptions(window, { sillHeight: 900 }).sillHeight).toBe(250);
+    expect(normalizeOpeningOptions(window, { kind: 'door' }).sillHeight).toBe(0);
+  });
+
+  it('высота двери фиксирована', () => {
+    expect(normalizeOpeningOptions(door, { height: 250 }).height).toBe(210);
+  });
+});
+
+describe('OPENING_WIDTH_PRESETS', () => {
+  it('все стандартные ширины укладываются в пределы своего вида', () => {
+    for (const [kind, widths] of Object.entries(OPENING_WIDTH_PRESETS)) {
+      const limits = OPENING_DEFAULTS[kind as keyof typeof OPENING_DEFAULTS];
+      for (const width of widths) {
+        expect(width).toBeGreaterThanOrEqual(limits.minWidth);
+        expect(width).toBeLessThanOrEqual(limits.maxWidth);
+      }
+    }
   });
 });

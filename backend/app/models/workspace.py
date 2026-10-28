@@ -43,5 +43,7 @@ class Workspace(Base):
     status: Mapped[WorkspaceStatus] = mapped_column(
         Enum(WorkspaceStatus, name="workspace_status", native_enum=True)
     )
+    # id этажа из scene.floors; NULL — первый этаж (места из планов до этажей).
+    floor_id: Mapped[str | None] = mapped_column(String(64), default=None)
 
     floor_plan: Mapped["FloorPlan"] = relationship(back_populates="workspaces")

@@ -18,6 +18,9 @@ class WorkspaceBase(BaseModel):
     )
     label: str = Field(max_length=255, description="Подпись рабочего места")
     status: WorkspaceStatus = Field(description="Статус: free / occupied / reserved")
+    floor_id: ClientId | None = Field(
+        default=None, description="Этаж плана (id из scene.floors); пусто — первый этаж"
+    )
 
     @field_validator("rotation")
     @classmethod

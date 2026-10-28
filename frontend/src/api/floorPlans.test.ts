@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FloorPlanApiError, loadFloorPlan, saveFloorPlan } from './floorPlans';
-import type { SceneData } from '../types/scene';
+import type { PlanData, SceneData } from '../types/scene';
 import { cm } from '../utils/scale';
 
-const emptyScene: SceneData = { version: 2, nodes: [], segments: [], workspaces: [] };
+const emptyPlan: PlanData = {
+  floors: [{ id: 'floor-1', name: '1 этаж', scene: { version: 2, nodes: [], segments: [], workspaces: [] } }],
+};
 
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -30,7 +32,7 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
       vi.fn().mockResolvedValue(jsonResponse(422, { detail })),
     );
 
-    await expect(saveFloorPlan(emptyScene, null)).rejects.toMatchObject({
+    await expect(saveFloorPlan(emptyPlan, null)).rejects.toMatchObject({
       message: 'сервер отклонил данные плана (body.segments.0.thickness: Input should be greater than 0)',
       status: 422,
     });
@@ -62,7 +64,7 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
   it('прочие статусы — общее сообщение с кодом', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(500, {})));
 
-    await expect(saveFloorPlan(emptyScene, null)).rejects.toMatchObject({
+    await expect(saveFloorPlan(emptyPlan, null)).rejects.toMatchObject({
       message: 'ошибка сервера (HTTP 500)',
       status: 500,
     });
@@ -71,7 +73,7 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
   it('422 без detail не падает и не показывает мусор', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(422, {})));
 
-    await expect(saveFloorPlan(emptyScene, null)).rejects.toMatchObject({
+    await expect(saveFloorPlan(emptyPlan, null)).rejects.toMatchObject({
       message: 'сервер отклонил данные плана',
     });
   });
@@ -88,13 +90,13 @@ describe('buildHttpErrorMessage (через saveFloorPlan/loadFloorPlan)', () =>
           background_image_url: null,
           created_at: '2026-01-01T00:00:00Z',
           updated_at: '2026-01-01T00:00:00Z',
-          scene: { version: 3, nodes: [], segments: [], openings: [] },
+          scene: { version: 4, floors: [] },
           workspaces: [],
         }),
       ),
     );
 
-    await expect(saveFloorPlan(emptyScene, null)).resolves.toBe(42);
+    await expect(saveFloorPlan(emptyPlan, null)).resolves.toBe(42);
   });
 });
 
@@ -109,7 +111,7 @@ describe('saveFloorPlan', () => {
         background_image_url: null,
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
-        scene: { version: 3, nodes: [], segments: [], openings: [] },
+        scene: { version: 4, floors: [] },
         workspaces: [],
       }),
     );
@@ -134,23 +136,43 @@ describe('saveFloorPlan', () => {
           status: 'free',
         },
       ],
+      rooms: [{ id: 'room-1', x: cm(50), y: cm(40), title: 'Коридор', note: 'бывший каб. 3' }],
     };
 
-    await saveFloorPlan(scene, 7);
+    await saveFloorPlan(
+      {
+        floors: [
+          { id: 'floor-1', name: '1 этаж', scene },
+          { id: 'floor-2', name: '2 этаж', scene: { version: 2, nodes: [], segments: [], workspaces: [] } },
+        ],
+      },
+      7,
+    );
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toMatch(/\/floor-plans\/7$/);
     expect(init.method).toBe('PUT');
     const body = JSON.parse(init.body as string);
     expect(body.scene).toEqual({
-      version: 2,
-      nodes: [
-        { id: 'node-a', x: 0, y: 0 },
-        { id: 'node-b', x: 100, y: 0 },
+      version: 4,
+      floors: [
+        {
+          id: 'floor-1',
+          name: '1 этаж',
+          nodes: [
+            { id: 'node-a', x: 0, y: 0 },
+            { id: 'node-b', x: 100, y: 0 },
+          ],
+          segments: [{ id: 'wall-1', start_node_id: 'node-a', end_node_id: 'node-b', thickness: 10 }],
+          openings: [],
+          rooms: [{ id: 'room-1', x: 50, y: 40, title: 'Коридор', note: 'бывший каб. 3' }],
+          fixtures: [],
+        },
+        { id: 'floor-2', name: '2 этаж', nodes: [], segments: [], openings: [], rooms: [], fixtures: [] },
       ],
-      segments: [{ id: 'wall-1', start_node_id: 'node-a', end_node_id: 'node-b', thickness: 10 }],
     });
     expect(body.workspaces[0].client_id).toBe('ws-1');
+    expect(body.workspaces[0].floor_id).toBe('floor-1');
     expect(body).not.toHaveProperty('nodes');
   });
 });
@@ -169,13 +191,21 @@ describe('loadFloorPlan', () => {
           created_at: '2026-01-01T00:00:00Z',
           updated_at: '2026-01-01T00:00:00Z',
           scene: {
-            version: 3,
-            nodes: [
-              { id: 'node-a', x: 0, y: 0 },
-              { id: 'node-b', x: 100, y: 0 },
+            version: 4,
+            floors: [
+              {
+                id: 'floor-1',
+                name: '1 этаж',
+                nodes: [
+                  { id: 'node-a', x: 0, y: 0 },
+                  { id: 'node-b', x: 100, y: 0 },
+                ],
+                segments: [{ id: 'wall-1', start_node_id: 'node-a', end_node_id: 'node-b', thickness: 10 }],
+                openings: [],
+                rooms: [{ id: 'room-1', x: 50, y: 40, title: 'каб. 7', note: '' }],
+              },
+              { id: 'floor-2', name: '2 этаж', nodes: [], segments: [], openings: [], rooms: [] },
             ],
-            segments: [{ id: 'wall-1', start_node_id: 'node-a', end_node_id: 'node-b', thickness: 10 }],
-            openings: [],
           },
           workspaces: [
             {
@@ -188,13 +218,30 @@ describe('loadFloorPlan', () => {
               rotation: 0,
               label: 'Стол',
               status: 'free',
+              floor_id: null,
+            },
+            {
+              id: 56,
+              client_id: 'ws-2',
+              x: 1,
+              y: 2,
+              width: 120,
+              height: 80,
+              rotation: 0,
+              label: 'Стол 2',
+              status: 'free',
+              floor_id: 'floor-2',
             },
           ],
         }),
       ),
     );
 
-    const scene = await loadFloorPlan(7);
+    const plan = await loadFloorPlan(7);
+    expect(plan.floors.map((floor) => floor.name)).toEqual(['1 этаж', '2 этаж']);
+    // Место без этажа — на первом, с этажом — на своём.
+    expect(plan.floors[1].scene.workspaces.map((w) => w.id)).toEqual(['ws-2']);
+    const scene = plan.floors[0].scene;
 
     expect(scene.version).toBe(2);
     expect(scene.nodes.map((n) => n.id)).toEqual(['node-a', 'node-b']);
@@ -202,6 +249,7 @@ describe('loadFloorPlan', () => {
       { id: 'wall-1', startNodeId: 'node-a', endNodeId: 'node-b', thickness: 10 },
     ]);
     expect(scene.workspaces[0].id).toBe('ws-1');
+    expect(scene.rooms).toEqual([{ id: 'room-1', x: 50, y: 40, title: 'каб. 7', note: '' }]);
   });
 });
 

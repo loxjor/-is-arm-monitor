@@ -202,6 +202,52 @@ button.arm-tree-brand {
   transition-delay: calc(var(--i, 0) * 30ms);
 }
 
+/* ─── Сенсорный экран: цели под палец и поля без автозума ────────── */
+
+/* Таблетки и кнопки системы — 24–26px в высоту: пальцем по ним промахиваются.
+   На сенсорном экране добираем до --touch-target (44px, минимум из
+   рекомендаций Apple; сумма токенов space-10 + space-1) только вертикальным
+   отступом — ширина, шрифт и строка компонента остаются по системе:
+   отступ = (цель − line-height компонента) / 2.
+   Единственное сознательное отступление от шкалы шрифтов — 16px в полях:
+   мельче iOS Safari при фокусе увеличивает всю страницу. */
+@media (pointer: coarse) {
+  :root {
+    --touch-target: calc(var(--space-10) + var(--space-1));
+  }
+
+  /* line-height у кнопок и таблеток системы — 14px (components.css). */
+  .arm-btn,
+  .arm-chip,
+  .arm-status,
+  .arm-tree a,
+  .arm-tree .arm-tree-group a.arm-tree-toggle {
+    padding-top: calc((var(--touch-target) - 14px) / 2);
+    padding-bottom: calc((var(--touch-target) - 14px) / 2);
+  }
+
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: var(--space-6);
+    height: var(--space-6);
+  }
+
+  button.arm-tree-brand {
+    min-height: var(--touch-target);
+  }
+
+  /* Строка поля — 22px (тело текста), плюс рамка 1px сверху и снизу. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+    padding-top: calc((var(--touch-target) - 24px) / 2);
+    padding-bottom: calc((var(--touch-target) - 24px) / 2);
+    /* select строку не берёт из line-height — добирает высоту так. */
+    min-height: var(--touch-target);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .arm-tree-brand .arm-tree-mark,
   .arm-tree-collapsible svg path,
