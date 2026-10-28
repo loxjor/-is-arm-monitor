@@ -128,7 +128,8 @@ h2 {
 
 .content {
   padding: var(--space-6) var(--space-10) var(--space-10);
-  max-width: 1400px;
+  /* Без потолка ширины: на широком 16:9 контент идёт по всей ширине, вровень
+     с шапкой, а не жмётся влево с пустой половиной экрана справа. */
   width: 100%;
 }
 
@@ -444,6 +445,16 @@ h2 {
   vertical-align: top;
 }
 
+/* На 1280–1366 с открытым меню широкие таблицы (заявки — девять колонок)
+   не помещались на ширину; поля ячеек поуже — и таблица встаёт без прокрутки. */
+@media (max-width: 1400px) {
+  .table th,
+  .table td {
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+}
+
 .table th {
   font-size: 11px;
   line-height: 15px;
@@ -495,7 +506,8 @@ h2 {
 
 .tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  /* 128px — чтобы шесть плиток парка вставали в один ряд и при открытом меню на 1280. */
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
   gap: var(--space-2);
   margin: var(--space-4) 0 var(--space-6);
 }
@@ -584,11 +596,17 @@ h2 {
   margin: 0;
 }
 
+/* Длинный текст в ячейке — не больше двух строк. Одна строка с nowrap
+   держала таблицу шире колонки (сам текст до 420px) — на 1366 с открытым
+   меню таблица заявок уезжала вбок. */
 .clip {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  min-width: 120px;
   max-width: 420px;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .section-head {
@@ -715,8 +733,7 @@ h2 {
 
 /* На широком экране страница с картой занимает ровно окно: карта — всё,
    что осталось под шапкой страницы, без прокрутки и без подбора «100vh − N»
-   под каждую шапку. И без ограничения ширины контента — на 16:9 карта
-   растягивается на весь экран, а не обрывается на 1400px. */
+   под каждую шапку. */
 @media (min-width: 861px) {
   .shell:has(.map-page) {
     height: 100vh;
@@ -731,7 +748,6 @@ h2 {
     min-height: 0;
     display: flex;
     flex-direction: column;
-    max-width: none;
   }
 
   .map-page {
