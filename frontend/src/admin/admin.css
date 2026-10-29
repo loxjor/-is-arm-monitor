@@ -1193,22 +1193,6 @@ h2 {
   .topbar .org {
     display: none;
   }
-
-  /* Ромб знака на телефоне не читается как кнопка, а подсказка-title на
-     сенсорном экране не всплывает — рядом со знаком подпись-таблетка. */
-  /* Размеры — как у .arm-chip из components.css: 11/14, отступы 5px 10px. */
-  button.arm-tree-brand::after {
-    content: "Меню";
-    line-height: 14px;
-    padding: 5px 10px;
-    border-radius: var(--radius-pill);
-    background: var(--surface);
-    color: var(--ink);
-  }
-
-  button.arm-tree-brand[aria-expanded="true"]::after {
-    content: "Свернуть";
-  }
 }
 
 /* ---- Телефон: строки таблиц — карточками ---- */
