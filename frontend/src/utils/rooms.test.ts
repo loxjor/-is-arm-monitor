@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { findRooms, polygonCentroid } from './rooms';
+import { findRooms, polygonCentroid, polygonLabelPoint } from './rooms';
+import { pointInPolygon } from './deskCollision';
 
 const square = (size: number, ox = 0, oy = 0) => [
   { id: `a${ox}`, x: ox, y: oy },
@@ -118,5 +119,33 @@ describe('polygonCentroid', () => {
     ]);
     expect(c.x).toBeCloseTo(50);
     expect(c.y).toBeCloseTo(25);
+  });
+});
+
+describe('polygonLabelPoint', () => {
+  it('для Г-образного помещения точка внутри, хотя центр масс — в вырезе', () => {
+    const l = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 30 },
+      { x: 30, y: 30 },
+      { x: 30, y: 100 },
+      { x: 0, y: 100 },
+    ];
+    expect(pointInPolygon(polygonCentroid(l), l)).toBe(false);
+    const p = polygonLabelPoint(l);
+    expect(pointInPolygon(p, l)).toBe(true);
+  });
+
+  it('для прямоугольника возвращает центр', () => {
+    const rect = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 50 },
+      { x: 0, y: 50 },
+    ];
+    const p = polygonLabelPoint(rect);
+    expect(p.x).toBeCloseTo(50, 0);
+    expect(p.y).toBeCloseTo(25, 0);
   });
 });

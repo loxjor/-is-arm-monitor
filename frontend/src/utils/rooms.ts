@@ -281,3 +281,123 @@ export function polygonCentroid(points: readonly WallEndpoint[]): WallEndpoint {
   }
   return { x: cx / (6 * area), y: cy / (6 * area) };
 }
+
+function pointInPolygonLocal(p: WallEndpoint, polygon: readonly WallEndpoint[]): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i];
+    const b = polygon[j];
+    if (a.y > p.y !== b.y > p.y && p.x < ((b.x - a.x) * (p.y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function squaredSegmentDistance(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) {
+    const ex = px - ax;
+    const ey = py - ay;
+    return ex * ex + ey * ey;
+  }
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / len2));
+  const qx = ax + dx * t;
+  const qy = ay + dy * t;
+  const ex = px - qx;
+  const ey = py - qy;
+  return ex * ex + ey * ey;
+}
+
+function distanceToPolygon(p: WallEndpoint, polygon: readonly WallEndpoint[]): number {
+  let minSq = Infinity;
+  for (let i = 0; i < polygon.length; i++) {
+    const a = polygon[i];
+    const b = polygon[(i + 1) % polygon.length];
+    minSq = Math.min(minSq, squaredSegmentDistance(p.x, p.y, a.x, a.y, b.x, b.y));
+  }
+  return Math.sqrt(minSq);
+}
+
+interface LabelCell {
+  x: number;
+  y: number;
+  h: number;
+  d: number;
+  max: number;
+}
+
+/**
+ * Точка внутри многоугольника, максимально удалённая от рёбер (polylabel,
+ * Mapbox) — для подписи помещения. Центр масс невыпуклого помещения может
+ * лежать снаружи, а эта точка — внутри и ближе к визуальному центру.
+ */
+export function polygonLabelPoint(polygon: readonly WallEndpoint[], precision = 1): WallEndpoint {
+  const n = polygon.length;
+  if (n === 0) return { x: 0, y: 0 };
+  if (n === 1) return { ...polygon[0] };
+  if (n === 2) {
+    return { x: (polygon[0].x + polygon[1].x) / 2, y: (polygon[0].y + polygon[1].y) / 2 };
+  }
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of polygon) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
+  }
+
+  const cellSize = Math.min(maxX - minX, maxY - minY);
+  if (cellSize <= 0) return { x: minX, y: minY };
+
+  const pointCell = (x: number, y: number): LabelCell => {
+    const d = pointInPolygonLocal({ x, y }, polygon) ? distanceToPolygon({ x, y }, polygon) : 0;
+    return { x, y, h: 0, d, max: d };
+  };
+  const makeCell = (x: number, y: number, h: number): LabelCell => {
+    const d = pointInPolygonLocal({ x, y }, polygon) ? distanceToPolygon({ x, y }, polygon) : 0;
+    return { x, y, h, d, max: d + h * Math.SQRT2 };
+  };
+
+  let best = pointCell((minX + maxX) / 2, (minY + maxY) / 2);
+  const centroid = polygonCentroid(polygon);
+  const centroidCell = pointCell(centroid.x, centroid.y);
+  if (centroidCell.d > best.d) best = centroidCell;
+
+  let h = cellSize / 2;
+  const cells: LabelCell[] = [];
+  for (let x = minX; x < maxX; x += cellSize) {
+    for (let y = minY; y < maxY; y += cellSize) {
+      cells.push(makeCell(x + h, y + h, h));
+    }
+  }
+
+  while (cells.length > 0) {
+    cells.sort((a, b) => b.max - a.max);
+    const cell = cells.pop()!;
+    if (cell.d > best.d) best = cell;
+    if (cell.max - best.d <= precision) continue;
+    h = cell.h / 2;
+    cells.push(
+      makeCell(cell.x - h, cell.y - h, h),
+      makeCell(cell.x + h, cell.y - h, h),
+      makeCell(cell.x - h, cell.y + h, h),
+      makeCell(cell.x + h, cell.y + h, h),
+    );
+  }
+
+  return { x: best.x, y: best.y };
+}

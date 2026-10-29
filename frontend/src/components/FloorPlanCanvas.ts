@@ -52,7 +52,7 @@ import {
   rayStartRelation,
 } from '../utils/geometry';
 import { alignmentLines, snapToAlignment, type AlignLine, type AlignResult } from '../utils/wallAlign';
-import { findRooms, polygonCentroid, type Room } from '../utils/rooms';
+import { findRooms, polygonLabelPoint, type Room } from '../utils/rooms';
 import { nextRoomTitles } from '../utils/roomNumbers';
 import { changeGate, lastValueMemo, wallGraphKey } from '../utils/memo';
 import {
@@ -131,6 +131,12 @@ const FIXTURE_KIND_BY_MODE: Partial<Record<CanvasMode, FixtureKind>> = {
 const FIXTURE_SNAP_CM = 5;
 const FIXTURE_MIN_SIZE_CM = 30;
 const FIXTURE_MAX_SIZE_CM = 2000;
+
+// Высота подписи помещения и примечания в сантиметрах плана — подпись лежит
+// в мировых координатах и масштабируется вместе с чертежом при зуме.
+const ROOM_TITLE_HEIGHT_CM = 28;
+const ROOM_NOTE_HEIGHT_CM = 20;
+const ROOM_NOTE_GAP_CM = 2;
 
 /** Размер стола, который ставит инструмент «Рабочее место», см (как DESK в workplace-map). */
 export const DESK_PLACEMENT_SIZE_CM = { width: 120, height: 60 } as const;
@@ -1643,6 +1649,7 @@ export class FloorPlanCanvas {
   }
 
   private renderWallOverlays(): void {
+    this.renderRooms();
     this.renderScaleDependentOverlays();
     this.emitSelectionChange();
   }
@@ -1665,7 +1672,6 @@ export class FloorPlanCanvas {
       const sides: WallSide[] = ['left', 'right'];
       wall.renderDimensions(sides.map((side) => runByOwnerKey.get(`${wall.id}:${side}`) ?? null), scale);
     });
-    this.renderRooms(scale);
     this.dimensionLayer.batchDraw();
     this.updateWallControls();
   }
@@ -3831,7 +3837,7 @@ export class FloorPlanCanvas {
   }
 
   /** Заливка и площадь замкнутых помещений (под стенами, по внутренним граням). */
-  private renderRooms(scale: number): void {
+  private renderRooms(): void {
     const nodes = [...this.nodes.values()].map((n) => ({ id: n.id, x: cmToPx(n.x), y: cmToPx(n.y) }));
     const edges = [...this.walls.values()].map((w) => ({
       startNodeId: w.startNodeId,
@@ -3854,18 +3860,18 @@ export class FloorPlanCanvas {
       );
       const roomLabel = this.roomLabelIn(room);
       if (roomLabel) {
-        this.roomGroup.add(this.createRoomCaption(roomLabel, polygonCentroid(room.polygon), scale));
+        this.roomGroup.add(this.createRoomCaption(roomLabel, polygonLabelPoint(room.polygon)));
       }
     }
     this.backgroundLayer.batchDraw();
   }
 
-  /** Название крупно, под ним примечание, если есть; блок по центру помещения, размер не зависит от зума. */
-  private createRoomCaption(roomLabel: RoomLabel, center: WallEndpoint, scale: number): Konva.Group {
+  /** Название крупно, под ним примечание, если есть; блок по центру помещения и масштабируется с зумом. */
+  private createRoomCaption(roomLabel: RoomLabel, center: WallEndpoint): Konva.Group {
     const caption = new Konva.Group({ listening: false });
     const title = new Konva.Text({
       text: roomLabel.title,
-      fontSize: 15 / scale,
+      fontSize: cmToPx(ROOM_TITLE_HEIGHT_CM),
       fontStyle: 'bold',
       fill: palette().ink,
       fontFamily: palette().fontSans,
@@ -3876,8 +3882,8 @@ export class FloorPlanCanvas {
     if (roomLabel.note) {
       const note = new Konva.Text({
         text: roomLabel.note,
-        y: height + 2 / scale,
-        fontSize: 12 / scale,
+        y: height + cmToPx(ROOM_NOTE_GAP_CM),
+        fontSize: cmToPx(ROOM_NOTE_HEIGHT_CM),
         fill: palette()['ink-muted'],
         fontFamily: palette().fontSans,
       });
@@ -3909,7 +3915,7 @@ export class FloorPlanCanvas {
         unlabeled.push(room);
       }
     });
-    const centers = unlabeled.map((room) => polygonCentroid(room.polygon));
+    const centers = unlabeled.map((room) => polygonLabelPoint(room.polygon));
     const corners = unlabeled.map((room) => ({
       x: Math.min(...room.polygon.map((point) => point.x)),
       y: Math.min(...room.polygon.map((point) => point.y)),
@@ -4250,7 +4256,7 @@ export class FloorPlanCanvas {
     if (!room || !roomLabel) {
       return;
     }
-    const at = this.stage.getAbsoluteTransform().point(polygonCentroid(room.polygon));
+    const at = this.stage.getAbsoluteTransform().point(polygonLabelPoint(room.polygon));
     this.roomEditor.open(at, { title: roomLabel.title, note: roomLabel.note }, ({ title, note }) => {
       if (title === roomLabel.title && note === roomLabel.note) {
         return;
@@ -4258,7 +4264,7 @@ export class FloorPlanCanvas {
       this.pushUndoSnapshot();
       roomLabel.title = title;
       roomLabel.note = note;
-      this.renderRooms(this.stage.scaleX());
+      this.renderRooms();
     });
   }
 
