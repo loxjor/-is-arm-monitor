@@ -6,12 +6,13 @@ from app.models.organization import Building
 from app.models.workspace import Workspace
 from app.schemas.floor_plan import (
     FloorPlanCreate,
+    FloorPlanExport,
     FloorPlanMetaUpdate,
     FloorPlanRead,
     FloorPlanSummary,
     FloorPlanUpdate,
 )
-from app.schemas.scene import upgrade_scene
+from app.schemas.scene import SceneWrite, upgrade_scene
 from app.schemas.workspace import WorkspaceCreate, WorkspaceRead
 from app.services.errors import ConflictError, NotFoundError
 
@@ -163,3 +164,36 @@ def delete_floor_plan(db: Session, floor_plan: FloorPlan) -> None:
     # Рабочие места уходят вместе с планом (delete-orphan, ON DELETE CASCADE).
     db.delete(floor_plan)
     db.commit()
+
+
+def to_export(floor_plan: FloorPlan) -> FloorPlanExport:
+    """Файл схемы для выгрузки: полная геометрия и места, без серверных ссылок."""
+    read = to_read(floor_plan)
+    return FloorPlanExport(
+        name=read.name,
+        width_cm=read.width_cm,
+        height_cm=read.height_cm,
+        background_image_url=read.background_image_url,
+        description=read.description,
+        scene=SceneWrite(version=read.scene.version, floors=read.scene.floors),
+        workspaces=[
+            WorkspaceCreate.model_validate(workspace.model_dump(exclude={"id"}))
+            for workspace in read.workspaces
+        ],
+    )
+
+
+def import_floor_plan(db: Session, data: FloorPlanExport) -> FloorPlan:
+    """Импортирует схему как отдельную (без территории), сохранив её имя."""
+    return create_floor_plan(
+        db,
+        FloorPlanCreate(
+            name=data.name,
+            width_cm=data.width_cm,
+            height_cm=data.height_cm,
+            background_image_url=data.background_image_url,
+            description=data.description,
+            scene=data.scene,
+            workspaces=data.workspaces,
+        ),
+    )

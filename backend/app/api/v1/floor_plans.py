@@ -1,4 +1,7 @@
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require
@@ -7,6 +10,7 @@ from app.db.session import get_db
 from app.models import AppUser
 from app.schemas.floor_plan import (
     FloorPlanCreate,
+    FloorPlanExport,
     FloorPlanMetaUpdate,
     FloorPlanRead,
     FloorPlanSummary,
@@ -51,12 +55,32 @@ def create_floor_plan(data: FloorPlanCreate, db: Session = Depends(get_db), _: A
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
 
+@router.post("/import", response_model=FloorPlanRead, status_code=status.HTTP_201_CREATED)
+def import_floor_plan(data: FloorPlanExport, db: Session = Depends(get_db), _: AppUser = Depends(_editor)):
+    return floor_plan_service.to_read(floor_plan_service.import_floor_plan(db, data))
+
+
 @router.get("/{floor_plan_id}", response_model=FloorPlanRead, responses=NOT_FOUND)
 def get_floor_plan(floor_plan_id: int, db: Session = Depends(get_db), _: AppUser = Depends(get_current_user)):
     floor_plan = floor_plan_service.get_floor_plan(db, floor_plan_id)
     if floor_plan is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor plan not found")
     return floor_plan_service.to_read(floor_plan)
+
+
+@router.get("/{floor_plan_id}/export", responses=NOT_FOUND)
+def export_floor_plan(floor_plan_id: int, db: Session = Depends(get_db), _: AppUser = Depends(get_current_user)):
+    floor_plan = floor_plan_service.get_floor_plan(db, floor_plan_id)
+    if floor_plan is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Floor plan not found")
+    document = floor_plan_service.to_export(floor_plan)
+    filename = f"схема-{floor_plan_id}.json"
+    disposition = f'attachment; filename="floor-plan-{floor_plan_id}.json"; filename*=UTF-8\'\'{quote(filename)}'
+    return Response(
+        content=document.model_dump_json(),
+        media_type="application/json",
+        headers={"Content-Disposition": disposition},
+    )
 
 
 def _get_or_404(db: Session, floor_plan_id: int):

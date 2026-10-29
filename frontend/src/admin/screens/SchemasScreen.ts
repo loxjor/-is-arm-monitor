@@ -1,5 +1,5 @@
 import { Button, ButtonLink } from '../../design/components';
-import { ApiError, api } from '../api/client';
+import { ApiError, api, download } from '../api/client';
 import type { FloorPlanSummary, GeocodeResult, MapConfig, MapTerritory, Scalar, TerritoryPlan } from '../api/types';
 import { Form, type FieldSpec } from '../ui/Form';
 import { Modal, confirmDialog } from '../ui/Modal';
@@ -98,7 +98,10 @@ export class SchemasScreen implements Screen {
         config,
         territories: this.territories,
         selectedId: selected,
-        actions: [Button('Добавить территорию', { onClick: () => this.openTerritoryForm(null) })],
+        actions: [
+          Button('Добавить территорию', { onClick: () => this.openTerritoryForm(null) }),
+          Button('Импорт схемы', { variant: 'light', onClick: () => this.importPlan() }),
+        ],
         renderDetails: (territory) => this.territoryDetails(territory),
         footer: loose
           ? [h('a', { class: 'territory-plan-link', href: `#/schemas?territory=${NO_TERRITORY}` },
@@ -135,6 +138,7 @@ export class SchemasScreen implements Screen {
       h('div', { class: 'territory-actions' },
         ButtonLink('Просмотр', `#/map?territory=${territory.building_id}`),
         Button('Описание', { variant: 'light', onClick: () => this.openDescription(territory, plan) }),
+        Button('Экспорт', { variant: 'light', onClick: () => void this.exportPlan(plan) }),
         editTerritory,
         Button('Удалить схему', { variant: 'light', onClick: () => void this.removeTerritoryPlan(territory, plan) }),
       ),
@@ -338,6 +342,7 @@ export class SchemasScreen implements Screen {
           h('h1', null, 'Схемы без территории'),
           h('p', { class: 'muted' }, 'Привяжите схему к территории в «Свойствах» — она получит имя территории и появится на карте.'),
         ),
+        Button('Импорт схемы', { variant: 'light', onClick: () => this.importPlan() }),
       ),
       cards,
     );
@@ -364,6 +369,7 @@ export class SchemasScreen implements Screen {
       h('div', { class: 'schema-card-actions' },
         ButtonLink('Просмотр', `#/map?territory=${NO_TERRITORY}&plan=${plan.id}`),
         Button('Свойства', { variant: 'light', onClick: () => this.openLooseEdit(plan) }),
+        Button('Экспорт', { variant: 'light', onClick: () => void this.exportPlan(plan) }),
         Button('Удалить', { variant: 'light', onClick: () => void this.removeLoose(plan) }),
       ),
     );
@@ -409,6 +415,44 @@ export class SchemasScreen implements Screen {
     try {
       await api.delete(`/floor-plans/${plan.id}`);
       toast('Схема удалена');
+      await this.showLoosePlans();
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+
+  // ─── Экспорт и импорт схем ────────────────────────────────────
+
+  private async exportPlan(plan: { id: number }): Promise<void> {
+    try {
+      await download(`/floor-plans/${plan.id}/export`, `схема-${plan.id}.json`);
+      toast('Схема выгружена');
+    } catch (error) {
+      toast(errorMessage(error), 'error');
+    }
+  }
+
+  private importPlan(): void {
+    const input = h('input', { type: 'file', accept: 'application/json,.json' }) as HTMLInputElement;
+    input.addEventListener('change', () => {
+      const file = input.files?.[0];
+      if (file) void this.readImportFile(file);
+    });
+    input.click();
+  }
+
+  private async readImportFile(file: File): Promise<void> {
+    let data: unknown;
+    try {
+      data = JSON.parse(await file.text());
+    } catch {
+      toast('Файл не является JSON-схемой', 'error');
+      return;
+    }
+    try {
+      const created = await api.post<{ name: string }>('/floor-plans/import', data);
+      toast(`Схема «${created.name}» импортирована`);
+      // Импортированная схема не привязана к территории — показываем её среди «схем без территории».
       await this.showLoosePlans();
     } catch (error) {
       toast(errorMessage(error), 'error');

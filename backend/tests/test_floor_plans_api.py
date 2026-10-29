@@ -425,3 +425,60 @@ class TestValidation:
 
     def test_door_without_hinge(self, client: TestClient) -> None:
         self.post(client, with_door(room_payload(), hinge=None))
+
+
+class TestExportImport:
+    def test_export_then_import_round_trip(self, client: TestClient) -> None:
+        plan_id = client.post(URL, json=room_payload()).json()["id"]
+        exported = client.get(f"{URL}/{plan_id}/export")
+        assert exported.status_code == 200, exported.text
+        assert exported.headers["content-disposition"].startswith("attachment;")
+        document = exported.json()
+        assert document["format"] == "arm-monitor-floor-plan"
+        assert document["format_version"] == 1
+        assert document["name"] == "Офис"
+        assert document["scene"]["version"] == 4
+        assert document["workspaces"][0]["client_id"] == "ws-1"
+        assert "id" not in document["workspaces"][0]
+        assert "building_id" not in document
+
+        imported = client.post(f"{URL}/import", json=document)
+        assert imported.status_code == 201, imported.text
+        body = imported.json()
+        assert body["id"] != plan_id
+        assert body["name"] == "Офис"
+        assert body["building_id"] is None
+        assert body["scene"]["floors"][0]["nodes"][0]["id"] == "n1"
+        assert body["workspaces"][0]["client_id"] == "ws-1"
+
+    def test_export_keeps_territory_plan_name(self, client: TestClient) -> None:
+        building = client.post(
+            "/api/v1/territories",
+            json={"name": "Корпус А", "address": "г. Москва, ул. Тестовая, 1", "latitude": 55.75, "longitude": 37.61},
+        ).json()
+        payload = room_payload()
+        payload["building_id"] = building["building_id"]
+        plan_id = client.post(URL, json=payload).json()["id"]
+        document = client.get(f"{URL}/{plan_id}/export").json()
+        assert document["name"] == "Корпус А"
+
+    def test_import_creates_loose_plan_and_round_trips_floors(self, client: TestClient) -> None:
+        plan_id = client.post(URL, json=two_floors_payload()).json()["id"]
+        document = client.get(f"{URL}/{plan_id}/export").json()
+        imported = client.post(f"{URL}/import", json=document).json()
+        assert imported["building_id"] is None
+        assert [(f["id"], f["name"]) for f in imported["scene"]["floors"]] == [("f1", "1 этаж"), ("f2", "2 этаж")]
+        assert {w["client_id"]: w["floor_id"] for w in imported["workspaces"]} == {"ws-1": "f1", "ws-2": "f2"}
+
+    def test_export_missing_plan_is_404(self, client: TestClient) -> None:
+        assert client.get(f"{URL}/999/export").status_code == 404
+
+    def test_import_rejects_unknown_field(self, client: TestClient) -> None:
+        document = room_payload()
+        document["extra"] = True
+        assert client.post(f"{URL}/import", json=document).status_code == 422
+
+    def test_import_rejects_empty_name(self, client: TestClient) -> None:
+        document = room_payload()
+        document["name"] = ""
+        assert client.post(f"{URL}/import", json=document).status_code == 422

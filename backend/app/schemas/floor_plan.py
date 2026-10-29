@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
@@ -29,6 +29,18 @@ class FloorPlanBase(BaseModel):
     )
 
 
+def _validate_workspaces(scene: SceneWrite, workspaces: list[WorkspaceCreate]) -> None:
+    """Рабочие места: уникальные client_id и ссылки только на известные этажи."""
+    seen: set[str] = set()
+    floor_ids = set(scene.floor_ids())
+    for workspace in workspaces:
+        if workspace.client_id in seen:
+            raise ValueError(f"повторяющийся client_id рабочего места: {workspace.client_id!r}")
+        seen.add(workspace.client_id)
+        if workspace.floor_id is not None and workspace.floor_id not in floor_ids:
+            raise ValueError(f"рабочее место {workspace.client_id!r} на неизвестном этаже")
+
+
 class FloorPlanCreate(FloorPlanBase):
     # Схема территории называется как территория — своё название нужно только
     # схеме без территории (сервер подставит имя здания, если оно задано).
@@ -44,14 +56,7 @@ class FloorPlanCreate(FloorPlanBase):
     def check_workspaces(self) -> "FloorPlanCreate":
         if self.building_id is None and not (self.name and self.name.strip()):
             raise ValueError("у схемы без территории должно быть название")
-        seen: set[str] = set()
-        floor_ids = set(self.scene.floor_ids())
-        for workspace in self.workspaces:
-            if workspace.client_id in seen:
-                raise ValueError(f"повторяющийся client_id рабочего места: {workspace.client_id!r}")
-            seen.add(workspace.client_id)
-            if workspace.floor_id is not None and workspace.floor_id not in floor_ids:
-                raise ValueError(f"рабочее место {workspace.client_id!r} на неизвестном этаже")
+        _validate_workspaces(self.scene, self.workspaces)
         return self
 
 
@@ -82,6 +87,33 @@ class FloorPlanRead(FloorPlanBase):
     updated_at: datetime
     scene: SceneRead
     workspaces: list[WorkspaceRead]
+
+
+class FloorPlanExport(BaseModel):
+    """
+    Самодостаточный файл схемы (JSON) для переноса между серверами и резервной
+    копии: геометрия, рабочие места и описание без серверных ссылок (id строк,
+    территория). Импортируется как схема без территории с сохранением имени.
+    """
+
+    format: Literal["arm-monitor-floor-plan"] = "arm-monitor-floor-plan"
+    format_version: Literal[1] = 1
+    name: str = Field(min_length=1, max_length=255, description="Название схемы")
+    width_cm: PositiveSize = Field(description="Ширина сцены плана, см")
+    height_cm: PositiveSize = Field(description="Высота сцены плана, см")
+    background_image_url: str | None = Field(
+        default=None, max_length=2048, description="URL фонового изображения плана"
+    )
+    description: Description = Field(default=None, description="Описание схемы")
+    scene: SceneWrite
+    workspaces: list[WorkspaceCreate] = Field(default_factory=list, max_length=MAX_WORKSPACES)
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def check_workspaces(self) -> "FloorPlanExport":
+        _validate_workspaces(self.scene, self.workspaces)
+        return self
 
 
 class FloorPlanSummary(FloorPlanBase):

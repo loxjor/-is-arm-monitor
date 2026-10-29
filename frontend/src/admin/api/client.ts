@@ -148,3 +148,44 @@ export const api = {
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, { body }),
   delete: (path: string) => request<void>('DELETE', path),
 };
+
+/** Имя файла из Content-Disposition: предпочитает UTF-8 filename* перед filename. */
+function extractFilename(disposition: string | null): string | null {
+  if (!disposition) return null;
+  const utf8 = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8[1].trim());
+    } catch {
+      // неверный percent-encoding — пробуем обычный filename
+    }
+  }
+  const plain = /filename="?([^";]+)"?/i.exec(disposition);
+  return plain ? plain[1].trim() : null;
+}
+
+/** Скачивает файл с авторизацией (например, выгрузку схемы). */
+export async function download(path: string, fallbackName: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { headers });
+  } catch {
+    throw new ApiError('Сервер недоступен', 0);
+  }
+  if (!response.ok) {
+    const error = await buildError(response);
+    if (error.status === 401 && token) onUnauthorized?.();
+    throw error;
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = extractFilename(response.headers.get('Content-Disposition')) ?? fallbackName;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
