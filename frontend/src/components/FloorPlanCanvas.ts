@@ -1048,23 +1048,35 @@ export class FloorPlanCanvas {
   }
 
   /**
-   * Перекрывает ли прямоугольник стола какую-нибудь стену или другой стол.
-   * Стол ужимается на 1 px: вплотную к стене или к соседу ставить можно.
+   * Перекрывает ли прямоугольник какую-нибудь стену, другой стол, лестницу
+   * или лифт. Проверяемый прямоугольник ужимается на 1 px: вплотную к стене
+   * или к соседу ставить можно.
    */
-  private deskCollides(cornersPx: readonly DeskPoint[], excludeWorkspaceId?: string): boolean {
-    const desk = shrinkRect(cornersPx, 1);
+  private rectCollides(cornersPx: readonly DeskPoint[], exclude: { workspaceId?: string; fixtureId?: string }): boolean {
+    const rect = shrinkRect(cornersPx, 1);
     // Сначала дешёвая проверка охватывающих прямоугольников: точная
-    // polygonsOverlap нужна лишь соседям — а зовётся это на каждый шаг протяжки стола.
-    const deskBounds = boundsOf(desk);
+    // polygonsOverlap нужна лишь соседям — а зовётся это на каждый шаг протяжки.
+    const rectBounds = boundsOf(rect);
     const overlaps = (polygon: readonly DeskPoint[]): boolean =>
-      boundsMayOverlap(deskBounds, boundsOf(polygon)) && polygonsOverlap(desk, polygon);
+      boundsMayOverlap(rectBounds, boundsOf(polygon)) && polygonsOverlap(rect, polygon);
     for (const wall of this.walls.values()) {
       if (overlaps(wall.getPolygon())) return true;
     }
     for (const [id, workspace] of this.workspaces) {
-      if (id !== excludeWorkspaceId && overlaps(workspace.cornersPx())) return true;
+      if (id !== exclude.workspaceId && overlaps(workspace.cornersPx())) return true;
+    }
+    for (const [id, fixture] of this.fixtures) {
+      if (id !== exclude.fixtureId && overlaps(fixture.cornersPx())) return true;
     }
     return false;
+  }
+
+  private deskCollides(cornersPx: readonly DeskPoint[], excludeWorkspaceId?: string): boolean {
+    return this.rectCollides(cornersPx, { workspaceId: excludeWorkspaceId });
+  }
+
+  private fixtureCollides(cornersPx: readonly DeskPoint[], excludeFixtureId?: string): boolean {
+    return this.rectCollides(cornersPx, { fixtureId: excludeFixtureId });
   }
 
   private hideDeskGhost(): void {
@@ -2784,6 +2796,9 @@ export class FloorPlanCanvas {
       onSelect: (selected) => this.pick(selected.id, () => this.selectFixture(selected)),
     });
     fixture.setDraggable(this.mode === 'select');
+    // Как и стол: лестница/лифт «упирается» в стену, стол или соседа и
+    // остаётся на последней свободной позиции, а не отскакивает после отпускания.
+    let lastValid = fixture.group.position();
     fixture.group.on('dragstart', () => {
       if (this.groupSelection.has(fixture.id)) {
         this.startGroupMove();
@@ -2791,15 +2806,37 @@ export class FloorPlanCanvas {
       }
       this.pushUndoSnapshot();
       this.selectFixture(fixture);
+      lastValid = fixture.group.position();
     });
     fixture.group.on('dragmove', () => {
-      if (this.groupMove) this.continueGroupMove();
+      if (this.groupMove) {
+        this.continueGroupMove();
+        return;
+      }
+      const target = fixture.group.position();
+      // Идём от последней свободной точки к курсору мелкими шагами: при резком
+      // рывке мыши иначе знак перепрыгнул бы тонкую стену за один dragmove.
+      const steps = Math.max(1, Math.ceil(Math.hypot(target.x - lastValid.x, target.y - lastValid.y) / DESK_SWEEP_STEP_PX));
+      for (let i = 1; i <= steps; i += 1) {
+        const t = i / steps;
+        fixture.group.position({ x: lastValid.x + (target.x - lastValid.x) * t, y: lastValid.y + (target.y - lastValid.y) * t });
+        if (this.fixtureCollides(fixture.cornersPx(), fixture.id)) {
+          fixture.group.position({
+            x: lastValid.x + (target.x - lastValid.x) * ((i - 1) / steps),
+            y: lastValid.y + (target.y - lastValid.y) * ((i - 1) / steps),
+          });
+          break;
+        }
+      }
+      lastValid = fixture.group.position();
+      fixture.setColliding(this.fixtureCollides(fixture.cornersPx(), fixture.id));
     });
     fixture.group.on('dragend', () => {
       if (this.groupMove) {
         this.finishGroupMove();
         return;
       }
+      fixture.setColliding(false);
       fixture.data = fixture.toData();
     });
     this.mainLayer.add(fixture.group);
@@ -2901,6 +2938,7 @@ export class FloorPlanCanvas {
       this.mainLayer.add(this.fixtureGhost.group);
     }
     this.fixtureGhost.update(data);
+    this.fixtureGhost.setColliding(this.fixtureCollides(this.fixtureGhost.cornersPx()));
     this.fixtureGhost.group.visible(true);
     this.mainLayer.batchDraw();
   }
@@ -2918,6 +2956,8 @@ export class FloorPlanCanvas {
     if (event.evt instanceof MouseEvent && event.evt.button !== 0) return;
     const data = this.fixtureAtPointer(kind);
     if (!data) return;
+    // На стену, стол или другую лестницу/лифт не ставим — призрак в этот момент красный.
+    if (this.fixtureGhost && this.fixtureCollides(this.fixtureGhost.cornersPx())) return;
     this.pushUndoSnapshot();
     this.registerFixture(data);
     // Призрак — поверх только что поставленной, чтобы было видно, куда встанет следующая.
@@ -4104,6 +4144,17 @@ export class FloorPlanCanvas {
     this.openingLayer.batchDraw();
   }
 
+  /** Пометить выделенную дверь входной ('вход') или снять пометку. */
+  setSelectedOpeningEntrance(entrance: boolean): void {
+    const opening = this.selectedId ? this.openings.get(this.selectedId) : undefined;
+    if (!opening) return;
+    if (opening.data.entrance === entrance) return;
+    this.pushUndoSnapshot();
+    opening.data = { ...opening.data, entrance };
+    this.renderOpening(opening);
+    this.openingLayer.batchDraw();
+  }
+
   /**
    * Куда встанет новый проём под курсором: ближайшая стена, в чью толщину
    * (с допуском OPENING_SNAP_SCREEN_PX) попадает курсор, центр — проекция
@@ -4150,6 +4201,7 @@ export class FloorPlanCanvas {
       sillHeight: cm(options.sillHeight),
       hinge: 'start',
       swing: side,
+      entrance: false,
     };
   }
 

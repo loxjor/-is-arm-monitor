@@ -12,6 +12,7 @@
   "dependencies": {
     "konva": "^9.3.14",
     "ol": "^10.2.1",
+    "pdfjs-dist": "^4.10.38",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {

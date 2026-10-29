@@ -15,6 +15,7 @@ import { emptyScene, type PlanData, type PlanFloor, type SceneData } from './typ
 import { FloorPicker } from './components/FloorPicker';
 import { CalibrationPanel } from './components/CalibrationPanel';
 import { BackgroundMenu } from './components/BackgroundMenu';
+import { renderPdfToImage } from './utils/pdfToImage';
 import { StairsMenu } from './components/StairsMenu';
 import { STAIR_MENU, STAIR_VARIANTS, type StairVariant } from './types/fixture';
 import { copyFloorScene, floorInsertIndex, floorName, type FloorCopyMode } from './utils/floorCopy';
@@ -67,6 +68,7 @@ const openingKindButtons = Array.from(document.querySelectorAll<HTMLButtonElemen
 const openingWidthInput = $<HTMLInputElement>('#input-opening-width');
 const openingWidthPresets = $<HTMLElement>('#opening-width-presets');
 const openingDoorActions = $<HTMLElement>('#opening-door-actions');
+const entranceBtn = $<HTMLButtonElement>('#btn-entrance');
 
 const hint = $<HTMLElement>('#canvas-hint');
 const floorPickerHost = $<HTMLElement>('#floor-picker-host');
@@ -305,7 +307,9 @@ const OPENING_NAMES: Record<OpeningKind, string> = {
 };
 
 /** Чьи параметры показывает панель: активного инструмента (tool) или выделенного проёма (tool = null). */
-function openingPanelTarget(): { options: OpeningOptions; tool: OpeningToolMode | null } | null {
+type OpeningPanelOptions = OpeningOptions & { entrance?: boolean };
+
+function openingPanelTarget(): { options: OpeningPanelOptions; tool: OpeningToolMode | null } | null {
   const mode = canvas.getMode();
   if (mode === 'place-window' || mode === 'place-door') {
     return { options: canvas.getOpeningTool(mode), tool: mode };
@@ -314,7 +318,7 @@ function openingPanelTarget(): { options: OpeningOptions; tool: OpeningToolMode 
   return selected ? { options: selected, tool: null } : null;
 }
 
-function renderOpeningSettings(options: OpeningOptions, tool: OpeningToolMode | null): void {
+function renderOpeningSettings(options: OpeningPanelOptions, tool: OpeningToolMode | null): void {
   const isWindow = WINDOW_KINDS.includes(options.kind);
   const limits = OPENING_DEFAULTS[options.kind];
   openingTitle.textContent = tool ? 'Ставим: ' + OPENING_NAMES[options.kind].toLowerCase() : OPENING_NAMES[options.kind];
@@ -332,6 +336,7 @@ function renderOpeningSettings(options: OpeningOptions, tool: OpeningToolMode | 
   openingWidthInput.max = String(limits.maxWidth);
   renderWidthPresets(options);
   openingDoorActions.hidden = tool !== null || (options.kind !== 'door' && options.kind !== 'door_double');
+  entranceBtn.setAttribute('aria-pressed', String(Boolean(options.entrance)));
 }
 
 /** Кнопки стандартных ширин текущего вида; нажата та, что совпадает с шириной. */
@@ -376,6 +381,13 @@ openingWidthInput.addEventListener('change', () => {
 });
 $<HTMLButtonElement>('#btn-flip-hinge').addEventListener('click', () => canvas.flipSelectedOpening('hinge'));
 $<HTMLButtonElement>('#btn-flip-swing').addEventListener('click', () => canvas.flipSelectedOpening('swing'));
+entranceBtn.addEventListener('click', () => {
+  const target = openingPanelTarget();
+  if (target && !target.tool) {
+    canvas.setSelectedOpeningEntrance(!target.options.entrance);
+    refreshSettingsPanel();
+  }
+});
 
 const deskStatusButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('#settings-desk .preset-btn'));
 deskStatusButtons.forEach((button) => {
@@ -427,10 +439,16 @@ function refreshBackgroundMenu(): void {
 }
 
 const backgroundMenu = new BackgroundMenu({
-  onLoad: (file) => {
-    canvas.calibrateBackground(URL.createObjectURL(file));
-    setTool('calibrate');
-    calibrationPanel.showDraw();
+  onLoad: async (file) => {
+    try {
+      const url = file.type === 'application/pdf' ? await renderPdfToImage(file) : URL.createObjectURL(file);
+      canvas.calibrateBackground(url);
+      setTool('calibrate');
+      calibrationPanel.showDraw();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'неизвестная ошибка';
+      showStatus(`Не удалось загрузить подложку: ${message}`, true);
+    }
   },
   onCalibrate: () => {
     if (!canvas.recalibrateBackground()) return;

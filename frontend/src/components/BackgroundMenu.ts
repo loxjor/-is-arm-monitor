@@ -48,7 +48,7 @@ export class BackgroundMenu {
 
     this.fileInput = document.createElement('input');
     this.fileInput.type = 'file';
-    this.fileInput.accept = 'image/*';
+    this.fileInput.accept = 'image/*,application/pdf';
     this.fileInput.id = 'input-background';
     this.fileInput.addEventListener('change', () => {
       const file = this.fileInput.files?.[0];

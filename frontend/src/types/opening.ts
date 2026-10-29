@@ -16,6 +16,8 @@ export interface WallOpening {
   hinge: 'start' | 'end';
   /** В какую сторону стены открывается полотно; 'left' — сторона +perp, как в utils/wallEdit.ts */
   swing: 'left' | 'right';
+  /** Входная дверь (вход в помещение/здание); нет у окон и у старых планов. */
+  entrance?: boolean;
 }
 
 export interface OpeningDefaults {

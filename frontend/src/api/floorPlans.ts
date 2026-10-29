@@ -49,6 +49,7 @@ interface SceneOpeningDto {
   sill_height: number;
   hinge: 'start' | 'end' | null;
   swing: 'left' | 'right' | null;
+  entrance: boolean | null;
 }
 
 interface SceneFixtureDto {
@@ -134,6 +135,7 @@ function toFloorPayload({ id, name, scene }: PlanFloor): SceneFloorDto {
       sill_height: opening.sillHeight,
       hinge: opening.hinge,
       swing: opening.swing,
+      entrance: opening.entrance ?? false,
     })),
     rooms: (scene.rooms ?? []).map((room) => ({
       id: room.id,
@@ -204,6 +206,7 @@ function fromFloorDto(floor: SceneFloorDto, workspaces: WorkspaceResponse[]): Sc
     // У окон сервер может не хранить петли — подставляем, чтобы смена вида на дверь не ломала знак.
     hinge: opening.hinge ?? 'start',
     swing: opening.swing ?? 'left',
+    entrance: opening.entrance ?? false,
   }));
 
   const fixtures: FixtureData[] = (floor.fixtures ?? []).map((fixture) => ({

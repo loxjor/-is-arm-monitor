@@ -23,6 +23,10 @@ const FRAME_BACK_CM = 6;
 const FRAME_PROFILE_CM = 2;
 // Полотно рисуется приоткрытым — так видно и петли, и куда оно открывается.
 const DOOR_OPEN_ANGLE_DEG = 45;
+// Стрелка «вход» у входной двери: длина стержня и размер наконечника, см.
+const ENTRANCE_ARROW_LENGTH_CM = 40;
+const ENTRANCE_ARROW_HEAD_LENGTH_CM = 16;
+const ENTRANCE_ARROW_HEAD_WIDTH_CM = 18;
 
 const isDoor = (kind: WallOpening['kind']): boolean => kind === 'door' || kind === 'door_double';
 
@@ -195,6 +199,36 @@ export class Opening {
         line(leaf.leaf, { closed: true, fill: p.surface }),
       );
     });
+
+    // Входная дверь: стрелка поперёк проёма, направленная внутрь помещения
+    // (в ту сторону, куда открывается полотно).
+    if (this.data.entrance) {
+      const side = this.data.swing === 'left' ? 1 : -1;
+      const arrowLength = cmToPx(ENTRANCE_ARROW_LENGTH_CM);
+      const headLength = cmToPx(ENTRANCE_ARROW_HEAD_LENGTH_CM);
+      const headHalfWidth = cmToPx(ENTRANCE_ARROW_HEAD_WIDTH_CM) / 2;
+      const tip = at(opening.offset, side * (half + headLength));
+      const base = at(opening.offset, side * half);
+      const baseLeft = at(opening.offset - headHalfWidth, side * half);
+      const baseRight = at(opening.offset + headHalfWidth, side * half);
+      const tail = at(opening.offset, -side * (half + arrowLength));
+      this.group.add(
+        new Konva.Line({
+          points: [tail.x, tail.y, base.x, base.y],
+          stroke: p.accent,
+          strokeWidth: 2,
+          strokeScaleEnabled: false,
+        }),
+        new Konva.Line({
+          points: [baseLeft.x, baseLeft.y, tip.x, tip.y, baseRight.x, baseRight.y],
+          closed: true,
+          fill: p.accent,
+          stroke: p.accent,
+          strokeWidth: 1,
+          strokeScaleEnabled: false,
+        }),
+      );
+    }
   }
 
   private leafGeometries(frame: OpeningWallFrame, opening: PxOpening): (LeafGeometry | null)[] {

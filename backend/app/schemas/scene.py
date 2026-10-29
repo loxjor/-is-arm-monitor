@@ -70,6 +70,7 @@ class SceneOpening(StrictModel):
     sill_height: Annotated[float, Field(allow_inf_nan=False, ge=0, le=100_000)]
     hinge: Literal["start", "end"] | None = None
     swing: Literal["left", "right"] | None = None
+    entrance: bool = False
 
     @model_validator(mode="after")
     def leaf_needs_hinge_and_swing(self) -> "SceneOpening":

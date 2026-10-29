@@ -24,6 +24,18 @@ export function rectCorners(topLeft: Point, width: number, height: number, rotat
   return [at(0, 0), at(width, 0), at(width, height), at(0, height)];
 }
 
+/** Углы прямоугольника, повёрнутого вокруг центра (как группа лестницы/лифта). */
+export function centeredRectCorners(center: Point, width: number, height: number, rotationDeg: number): Point[] {
+  const rad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const at = (dx: number, dy: number): Point => ({
+    x: center.x + dx * cos - dy * sin,
+    y: center.y + dx * sin + dy * cos,
+  });
+  return [at(-width / 2, -height / 2), at(width / 2, -height / 2), at(width / 2, height / 2), at(-width / 2, height / 2)];
+}
+
 /** Тот же прямоугольник, ужатый на inset со всех сторон: касание вплотную — не столкновение. */
 export function shrinkRect(corners: readonly Point[], inset: number): Point[] {
   const cx = corners.reduce((sum, p) => sum + p.x, 0) / corners.length;
