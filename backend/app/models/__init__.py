@@ -7,15 +7,11 @@ from app.models.enums import (
     DiscrepancyKind,
     EquipmentStatus,
     InventoryStatus,
-    TicketPriority,
-    TicketStatus,
-    TicketType,
 )
 from app.models.equipment import Assignment, Equipment
 from app.models.floor_plan import FloorPlan
 from app.models.inventory import Inventory, InventoryResult
 from app.models.organization import Building, Department, Employee, Room, Workplace
-from app.models.ticket import Ticket, TicketWork
 from app.models.workspace import Workspace, WorkspaceStatus
 from app.models.writeoff import WriteoffAct
 
@@ -41,11 +37,6 @@ __all__ = [
     "OperatingSystem",
     "Role",
     "Room",
-    "Ticket",
-    "TicketPriority",
-    "TicketStatus",
-    "TicketType",
-    "TicketWork",
     "Workplace",
     "Workspace",
     "WorkspaceStatus",

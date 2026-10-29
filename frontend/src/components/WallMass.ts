@@ -48,6 +48,17 @@ export class WallMass {
     this.polygons = polygons.filter((polygon) => polygon.length >= 3).map(toCounterClockwise);
   }
 
+  /**
+   * Масштаб штриховки относительно зума: обратный масштабу сцены, поэтому на
+   * экране штриховка выглядит одинаково при любом зуме, а не растягивается
+   * вместе со стенами.
+   */
+  setPatternScale(scale: number): void {
+    const inverse = 1 / scale;
+    this.shape.fillPatternScaleX(inverse);
+    this.shape.fillPatternScaleY(inverse);
+  }
+
   applyTheme(): void {
     this.shape.fillPatternImage(getWallHatchPattern());
     this.shape.stroke(palette().ink);

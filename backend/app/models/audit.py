@@ -19,6 +19,6 @@ class AuditLog(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("app_user.user_id"), index=True)
     action: Mapped[str] = mapped_column(String(50))
     entity: Mapped[str | None] = mapped_column(String(50))
-    # Строка, а не FK: у части сущностей составной ключ (assignment, ticket_work).
+    # Строка, а не FK: у части сущностей составной ключ (assignment, inventory_result).
     entity_id: Mapped[str | None] = mapped_column(String(50))
     details: Mapped[str | None] = mapped_column(Text)

@@ -1,8 +1,8 @@
 import { SpecRow, SpecTile } from '../../design/components';
 import { api } from '../api/client';
-import type { AssignmentRecord, EquipmentCard, Page, TicketListItem } from '../api/types';
+import type { AssignmentRecord, EquipmentCard } from '../api/types';
 import { can, currentUser } from '../auth';
-import { OPERATION_LABELS, TICKET_TYPE_LABELS, statusBadge, ticketBadge } from '../labels';
+import { OPERATION_LABELS, statusBadge } from '../labels';
 import { DataTable } from '../ui/DataTable';
 import { dash, formatDate, formatMoney, h, type Child } from '../ui/dom';
 import { printLabels } from '../ui/label';
@@ -77,17 +77,6 @@ export class EquipmentCardScreen implements Screen {
     );
     history.setRows(card.assignments);
 
-    const tickets = new DataTable<TicketListItem>(
-      [
-        { title: '№', render: (t) => String(t.ticket_id) },
-        { title: 'Создана', render: (t) => formatDate(t.created_at) },
-        { title: 'Тип', render: (t) => TICKET_TYPE_LABELS[t.ticket_type] },
-        { title: 'Описание', render: (t) => h('div', { class: 'clip' }, t.description) },
-        { title: 'Статус', render: (t) => ticketBadge(t.status) },
-      ],
-      { onRowClick: (t) => (location.hash = `#/tickets/${t.ticket_id}`), emptyText: 'Заявок не было' },
-    );
-
     // Ряд плиток — только заполненные характеристики: у монитора их нет вовсе.
     const specs = [
       card.cpu ? SpecTile(card.cpu, 'Процессор') : null,
@@ -118,9 +107,6 @@ export class EquipmentCardScreen implements Screen {
             type: 'button', class: 'arm-btn arm-btn-light',
             onclick: () => printLabels([card]).catch((error) => toast(errorMessage(error))),
           }, 'Печать этикетки'),
-          can('create_tickets') && card.status !== 'written_off'
-            ? h('a', { class: 'arm-btn arm-btn-light', href: `#/tickets/new?equipment=${card.equipment_id}` }, 'Подать заявку')
-            : null,
           editable
             ? h('button', {
                 type: 'button', class: 'arm-btn arm-btn-light',
@@ -151,18 +137,6 @@ export class EquipmentCardScreen implements Screen {
         ])),
       ),
       h('section', { class: 'card' }, h('h2', null, 'История назначений и перемещений'), history.element),
-      h('section', { class: 'card' }, h('h2', null, 'Заявки по оборудованию'), tickets.element),
     );
-    void this.loadTickets(card.equipment_id, tickets);
-  }
-
-  private async loadTickets(equipmentId: number, table: DataTable<TicketListItem>): Promise<void> {
-    table.setLoading();
-    try {
-      const page = await api.get<Page<TicketListItem>>('/tickets', { equipment_id: equipmentId, limit: 100 });
-      table.setRows(page.items);
-    } catch {
-      table.setRows([]);
-    }
   }
 }

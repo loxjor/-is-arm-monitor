@@ -451,6 +451,8 @@ export class FloorPlanCanvas {
   private readonly resizeObserver: ResizeObserver;
   private readonly unsubscribeTheme: () => void;
   private snapEnabled = true;
+  /** Показывать ли размеры стен (тулбар «Размеры»); в просмотре они скрыты независимо от него. */
+  private showDimensions = true;
   private deskGhost: Konva.Rect | null = null;
   private deskGhostRotation = 0;
   private onDeskPlace: ((topLeftCm: { x: Cm; y: Cm }, rotation: number) => void) | null = null;
@@ -752,6 +754,10 @@ export class FloorPlanCanvas {
   private applyZoomVisuals(scale: number): void {
     this.gridMinorRect?.visible(scale > GRID_MINOR_VISIBLE_ABOVE_SCALE);
     this.gridLayer.batchDraw();
+    this.wallMass.setPatternScale(scale);
+    // Штриховка стен перерисовывается с новым масштабом — stage.batchDraw в
+    // zoom-обработчике случился ДО смены fillPatternScale.
+    this.structureLayer.batchDraw();
     this.renderScaleDependentOverlays();
     this.deskSelection.setScale(scale);
     this.onScaleChange?.(scale);
@@ -906,6 +912,7 @@ export class FloorPlanCanvas {
   setMode(mode: CanvasMode): void {
     this.mode = mode;
     this.deselect();
+    this.applyDimensionsVisibility();
 
     const draggable = mode === 'select';
     this.workspaces.forEach((workspace) => workspace.setDraggable(draggable));
@@ -1114,7 +1121,13 @@ export class FloorPlanCanvas {
 
   /** Переключатель «Размеры» в тулбаре: подписи длин стен. */
   setShowDimensions(visible: boolean): void {
-    this.dimensionLayer.visible(visible);
+    this.showDimensions = visible;
+    this.applyDimensionsVisibility();
+  }
+
+  /** Размеры видны, только когда их включили в тулбаре и холст не в режиме просмотра. */
+  private applyDimensionsVisibility(): void {
+    this.dimensionLayer.visible(this.mode !== 'view' && this.showDimensions);
     this.dimensionLayer.batchDraw();
   }
 

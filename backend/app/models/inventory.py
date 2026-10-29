@@ -23,8 +23,14 @@ class Inventory(Base):
     )
     # NULL — инвентаризация по всему Отделению, а не по одному подразделению.
     dept_id: Mapped[int | None] = mapped_column(ForeignKey("department.dept_id"), index=True)
+    # Область проверки: территория (здание) и, при выборе кабинета, помещение.
+    building_id: Mapped[int | None] = mapped_column(ForeignKey("building.building_id"), index=True)
+    room_id: Mapped[int | None] = mapped_column(ForeignKey("room.room_id"), index=True)
     responsible_user_id: Mapped[int] = mapped_column(ForeignKey("app_user.user_id"), index=True)
 
+    building: Mapped["Building | None"] = relationship()
+    room: Mapped["Room | None"] = relationship()
+    responsible: Mapped["AppUser"] = relationship()
     results: Mapped[list["InventoryResult"]] = relationship(
         back_populates="inventory", cascade="all, delete-orphan"
     )
@@ -40,6 +46,8 @@ class InventoryResult(Base):
         ForeignKey("equipment.equipment_id"), primary_key=True
     )
     is_present: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Проверена ли единица (вручную чекбоксом или сканером); до проверки — нет.
+    checked: Mapped[bool] = mapped_column(Boolean, default=False)
     actual_room_id: Mapped[int | None] = mapped_column(ForeignKey("room.room_id"), index=True)
     discrepancy: Mapped[DiscrepancyKind | None] = mapped_column(
         check_enum(DiscrepancyKind, "ck_inventory_result_discrepancy")

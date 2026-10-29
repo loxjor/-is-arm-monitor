@@ -61,4 +61,3 @@ class Profile(BaseModel):
     head: PersonBrief | None = Field(description="Руководитель подразделения")
     territories: list[Territory]
     equipment: list[EquipmentListItem] = Field(description="Техника, выданная сотруднику")
-    open_tickets: int = Field(description="Незакрытые заявки сотрудника")

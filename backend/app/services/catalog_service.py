@@ -32,8 +32,6 @@ TABLE_TITLES: dict[str, str] = {
     "operating_system": "операционные системы",
     "equipment": "оборудование",
     "assignment": "история назначений",
-    "ticket": "заявки",
-    "ticket_work": "работы по заявкам",
     "inventory": "инвентаризации",
     "inventory_result": "результаты инвентаризаций",
     "writeoff_act": "акты списания",

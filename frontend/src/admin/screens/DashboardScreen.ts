@@ -1,7 +1,7 @@
 import { api } from '../api/client';
-import type { EquipmentStatus, TicketStatus } from '../api/types';
+import type { EquipmentStatus } from '../api/types';
 import { can, currentUser } from '../auth';
-import { STATUS_LABELS, STATUS_ORDER, TICKET_STATUS_LABELS } from '../labels';
+import { STATUS_LABELS, STATUS_ORDER } from '../labels';
 import { h } from '../ui/dom';
 import { errorMessage } from '../ui/toast';
 import type { Screen } from './Screen';
@@ -13,7 +13,6 @@ export class DashboardScreen implements Screen {
   constructor() {
     const user = currentUser();
     const tiles = h('div', { class: 'tiles' }, h('p', { class: 'muted' }, 'Загрузка…'));
-    const ticketTiles = h('div', { class: 'tiles' });
     const scopeNote = {
       all: 'Показан весь парк оборудования.',
       department: 'Показано оборудование вашего подразделения.',
@@ -26,8 +25,6 @@ export class DashboardScreen implements Screen {
       h('h1', null, `Здравствуйте, ${user.employee.full_name.split(' ').slice(1, 3).join(' ') || user.login}`),
       h('p', { class: 'muted' }, `${user.role.name}. ${scopeNote}`),
       tiles,
-      h('h2', null, 'Заявки'),
-      ticketTiles,
       h('div', { class: 'quick-links' },
         h('a', { class: 'arm-btn arm-btn-light', href: '#/equipment' }, 'Реестр оборудования'),
         h('a', { class: 'arm-btn arm-btn-light', href: '#/equipment?expiring=12' }, 'Истекает срок службы (12 мес.)'),
@@ -36,24 +33,6 @@ export class DashboardScreen implements Screen {
     );
 
     void this.load(tiles);
-    void this.loadTickets(ticketTiles);
-  }
-
-  private async loadTickets(tiles: HTMLElement): Promise<void> {
-    try {
-      const counts = await api.get<Partial<Record<TicketStatus, number>>>('/tickets/summary');
-      const open: TicketStatus[] = ['new', 'in_progress', 'done'];
-      tiles.replaceChildren(
-        ...open.map((status) =>
-          h('a', { class: `tile tile--ticket-${status}`, href: `#/tickets?status=${status}` },
-            h('span', { class: 'tile-value' }, String(counts[status] ?? 0)),
-            h('span', { class: 'tile-label' }, status === 'done' ? 'Ждут подтверждения' : TICKET_STATUS_LABELS[status]),
-          ),
-        ),
-      );
-    } catch (error) {
-      tiles.replaceChildren(h('p', { class: 'form-error' }, errorMessage(error)));
-    }
   }
 
   private async load(tiles: HTMLElement): Promise<void> {

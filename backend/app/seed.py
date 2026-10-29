@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import secrets
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time
 from pathlib import Path
 from decimal import Decimal
 
@@ -37,20 +37,15 @@ from app.models import (
     OperatingSystem,
     Role,
     Room,
-    Ticket,
-    TicketPriority,
-    TicketStatus,
-    TicketType,
-    TicketWork,
     Workplace,
 )
 
 ROLES = [
     ("admin", "Администратор ИС", "Полный доступ, учётные записи, роли, справочники, резервное копирование"),
-    ("sysadmin", "Системный администратор", "Реестр АРМ, назначение и перемещение, заявки, инвентаризация, подготовка списания"),
+    ("sysadmin", "Системный администратор", "Реестр АРМ, назначение и перемещение, инвентаризация, подготовка списания"),
     ("head", "Начальник отдела", "Согласование списания, просмотр всех данных, отчётность"),
-    ("dept_head", "Руководитель подразделения", "Заявки и просмотр АРМ своего подразделения, отчёты по подразделению"),
-    ("employee", "Сотрудник", "Просмотр закреплённого оборудования, подача заявок"),
+    ("dept_head", "Руководитель подразделения", "Просмотр АРМ своего подразделения, отчёты по подразделению"),
+    ("employee", "Сотрудник", "Просмотр закреплённого оборудования"),
 ]
 
 
@@ -80,11 +75,6 @@ def seed(db: Session) -> None:
         seed_history(db)
     else:
         print("История назначений уже есть — пропуск.")
-
-    if db.scalar(select(Ticket).limit(1)) is None:
-        seed_tickets(db)
-    else:
-        print("Заявки уже есть — пропуск.")
 
     if db.scalar(select(Department).where(Department.head_employee_id.is_not(None)).limit(1)) is None:
         seed_department_heads(db)
@@ -171,60 +161,6 @@ def seed_department_heads(db: Session) -> None:
             department.head_employee_id = head.employee_id
     db.commit()
     print("Руководители подразделений назначены.")
-
-
-def seed_tickets(db: Session) -> None:
-    sysadmin = db.scalar(select(AppUser).join(Role).where(Role.code == "sysadmin"))
-    employees = {e.full_name: e for e in db.scalars(select(Employee))}
-    by_workplace = {
-        (wp_no, type_name): equipment
-        for equipment, wp_no, type_name in db.execute(
-            select(Equipment, Workplace.workplace_no, EquipmentType.name)
-            .join(Workplace, Equipment.workplace_id == Workplace.workplace_id)
-            .join(EquipmentModel, Equipment.model_id == EquipmentModel.model_id)
-            .join(EquipmentType, EquipmentModel.type_id == EquipmentType.type_id)
-        ).tuples()
-    }
-    monitor = by_workplace.get(("301-1", "Монитор"))
-    pc = by_workplace.get(("301-2", "Системный блок"))
-    if sysadmin is None or monitor is None or pc is None:
-        return
-
-    db.add(
-        Ticket(
-            created_at=datetime.now().replace(microsecond=0) - timedelta(hours=3),
-            ticket_type=TicketType.repair,
-            description="Монитор мерцает и периодически гаснет",
-            priority=TicketPriority.high,
-            status=TicketStatus.new,
-            equipment_id=monitor.equipment_id,
-            requester_id=employees["Смирнова Анна Викторовна"].employee_id,
-        )
-    )
-    in_progress = Ticket(
-        created_at=datetime.now().replace(microsecond=0) - timedelta(days=1),
-        ticket_type=TicketType.service,
-        description="Установить отечественный офисный пакет",
-        priority=TicketPriority.normal,
-        status=TicketStatus.in_progress,
-        equipment_id=pc.equipment_id,
-        requester_id=employees["Петров Сергей Алексеевич"].employee_id,
-        assignee_id=sysadmin.user_id,
-    )
-    db.add(in_progress)
-    db.flush()
-    db.add(
-        TicketWork(
-            ticket_id=in_progress.ticket_id,
-            work_no=1,
-            performed_at=datetime.now().replace(microsecond=0) - timedelta(hours=20),
-            description="Скачан дистрибутив, согласовано время установки",
-            minutes_spent=15,
-            user_id=sysadmin.user_id,
-        )
-    )
-    db.commit()
-    print("Заявки добавлены.")
 
 
 def seed_history(db: Session) -> None:

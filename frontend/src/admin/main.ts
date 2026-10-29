@@ -14,14 +14,12 @@ import { CATALOG_DEFS } from './screens/catalogDefs';
 import { DashboardScreen } from './screens/DashboardScreen';
 import { EquipmentCardScreen } from './screens/EquipmentCardScreen';
 import { EquipmentListScreen } from './screens/EquipmentListScreen';
+import { InventoryScreen } from './screens/InventoryScreen';
 import { LoginScreen } from './screens/LoginScreen';
 import { MapScreen } from './screens/MapScreen';
 import { MyEquipmentScreen } from './screens/MyEquipmentScreen';
-import { NewTicketScreen } from './screens/NewTicketScreen';
 import { ProfileScreen } from './screens/ProfileScreen';
 import { SchemasScreen } from './screens/SchemasScreen';
-import { TicketCardScreen } from './screens/TicketCardScreen';
-import { TicketListScreen } from './screens/TicketListScreen';
 import { UsersScreen } from './screens/UsersScreen';
 import type { RouteContext, Screen } from './screens/Screen';
 import { h } from './ui/dom';
@@ -48,9 +46,8 @@ const ROUTES: Route[] = [
   { pattern: /^\/my-equipment$/, create: (context) => new MyEquipmentScreen(context) },
   { pattern: /^\/equipment$/, create: (context) => new EquipmentListScreen(context) },
   { pattern: /^\/equipment\/(\d+)$/, create: (context) => new EquipmentCardScreen(context) },
-  { pattern: /^\/tickets$/, create: (context) => new TicketListScreen(context) },
-  { pattern: /^\/tickets\/new$/, permission: 'create_tickets', create: (context) => new NewTicketScreen(context) },
-  { pattern: /^\/tickets\/(\d+)$/, create: (context) => new TicketCardScreen(context) },
+  { pattern: /^\/inventory$/, permission: 'conduct_inventory', create: (context) => new InventoryScreen(context) },
+  { pattern: /^\/inventory\/(\d+)$/, permission: 'conduct_inventory', create: (context) => new InventoryScreen(context) },
   { pattern: /^\/map$/, create: (context) => new MapScreen(context) },
   { pattern: /^\/schemas$/, permission: 'edit_floor_plans', create: (context) => new SchemasScreen(context) },
   { pattern: /^\/catalogs$/, permission: 'view_catalogs', create: () => new CatalogScreen(CATALOG_DEFS[0]) },
@@ -75,7 +72,6 @@ function navGroups(): TreeNavGroup[] {
         { href: '#/profile', label: 'Мой профиль' },
         { href: '#/my-equipment', label: 'Моё имущество' },
         ...(personal ? [] : [{ href: '#/summary', label: 'Сводка' }]),
-        { href: '#/tickets/new', label: 'Новая заявка', permission: 'create_tickets' },
       ],
     },
     // Карта территорий — самостоятельный пункт на уровне групп, без подпунктов.
@@ -85,7 +81,7 @@ function navGroups(): TreeNavGroup[] {
       items: [
         // Сотруднику реестр не нужен: всё его — в «Моём имуществе».
         ...(personal ? [] : [{ href: '#/equipment', label: 'Реестр оборудования' }]),
-        { href: '#/tickets', label: personal ? 'Мои заявки' : 'Заявки' },
+        { href: '#/inventory', label: 'Инвентаризация', permission: 'conduct_inventory' as const },
         { href: '#/schemas', label: 'Редактор схем', permission: 'edit_floor_plans' },
         // Справочники — одним пунктом; рабочий инструмент тех, кто видит весь парк,
         // сотруднику и руководителю подразделения не нужны.
@@ -244,7 +240,7 @@ function route(): void {
     shell?.classList.add('nav-collapsed');
   }
 
-  // Подсвечивается самый точный пункт: на /tickets/new — «Новая заявка», а не ещё и «Заявки».
+  // Подсвечивается самый точный пункт: на /equipment/1 — «Реестр оборудования», а не только он.
   const effectivePath = path === '/' ? '/profile' : path;
   const matches = (target: string) => effectivePath === target || effectivePath.startsWith(`${target}/`);
   const best = (tree?.links ?? [])

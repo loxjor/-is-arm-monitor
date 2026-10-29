@@ -12,8 +12,6 @@ export type Permission =
   | 'manage_catalogs'
   | 'manage_equipment'
   | 'assign_equipment'
-  | 'process_tickets'
-  | 'create_tickets'
   | 'conduct_inventory'
   | 'prepare_writeoff'
   | 'approve_writeoff'
@@ -114,41 +112,6 @@ export interface AuditLogEntry {
   details: string | null;
 }
 
-export type TicketType = 'install' | 'move' | 'service' | 'repair';
-export type TicketPriority = 'low' | 'normal' | 'high';
-export type TicketStatus = 'new' | 'in_progress' | 'done' | 'rejected' | 'closed';
-
-export interface TicketListItem {
-  ticket_id: number;
-  created_at: string;
-  ticket_type: TicketType;
-  description: string;
-  priority: TicketPriority;
-  status: TicketStatus;
-  closed_at: string | null;
-  equipment_id: number | null;
-  inventory_no: string | null;
-  requester_id: number;
-  requester_name: string;
-  assignee_id: number | null;
-  assignee_name: string | null;
-}
-
-export interface TicketWork {
-  work_no: number;
-  performed_at: string;
-  description: string;
-  minutes_spent: number | null;
-  result: string | null;
-  user_login: string;
-}
-
-export interface TicketCard extends TicketListItem {
-  works: TicketWork[];
-  can_transition_to: TicketStatus[];
-  can_add_work: boolean;
-}
-
 export interface PersonBrief {
   employee_id: number;
   full_name: string;
@@ -175,7 +138,6 @@ export interface Profile {
   head: PersonBrief | null;
   territories: Territory[];
   equipment: EquipmentListItem[];
-  open_tickets: number;
 }
 
 export interface FloorPlanSummary {
@@ -223,4 +185,57 @@ export interface GeocodeResult {
   address: string;
   latitude: number;
   longitude: number;
+}
+
+export type InventoryStatus = 'open' | 'closed';
+export type DiscrepancyKind = 'missing' | 'wrong_room' | 'extra';
+
+export interface InventoryTerritory {
+  building_id: number;
+  name: string;
+  address: string;
+  equipment_count: number;
+}
+
+export interface InventoryRoom {
+  room_id: number;
+  room_no: string;
+  floor: number;
+  equipment_count: number;
+}
+
+export interface InventoryRecord {
+  inventory_id: number;
+  started_on: string;
+  finished_on: string | null;
+  basis: string;
+  status: InventoryStatus;
+  building_id: number | null;
+  building_name: string | null;
+  room_id: number | null;
+  room_no: string | null;
+  responsible_name: string | null;
+  total_count: number;
+  checked_count: number;
+  present_count: number;
+}
+
+export interface InventoryItem {
+  equipment_id: number;
+  inventory_no: string;
+  serial_no: string | null;
+  model_name: string;
+  type_name: string;
+  manufacturer_name: string;
+  room_no: string | null;
+  workplace_no: string | null;
+  mol_name: string | null;
+  checked: boolean;
+  is_present: boolean;
+  discrepancy: DiscrepancyKind | null;
+  note: string | null;
+}
+
+export interface InventoryDetail extends InventoryRecord {
+  items: InventoryItem[];
 }

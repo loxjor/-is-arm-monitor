@@ -15,8 +15,6 @@ def test_employee_profile(client: TestClient) -> None:
     assert territory["room_no"] == "301" and territory["workplace_no"] == "301-1"
     assert territory["building_address"].startswith("г. Москва")
     assert {item["type_name"] for item in profile["equipment"]} == {"Системный блок", "Монитор"}
-    # Демо-заявка на мерцающий монитор ещё не закрыта.
-    assert profile["open_tickets"] == 1
 
 
 def test_update_own_contacts(client: TestClient) -> None:

@@ -19,8 +19,6 @@ class Permission(str, enum.Enum):
     manage_catalogs = "manage_catalogs"
     manage_equipment = "manage_equipment"
     assign_equipment = "assign_equipment"
-    process_tickets = "process_tickets"
-    create_tickets = "create_tickets"
     conduct_inventory = "conduct_inventory"
     prepare_writeoff = "prepare_writeoff"
     approve_writeoff = "approve_writeoff"
@@ -47,17 +45,15 @@ ROLE_PERMISSIONS: dict[RoleCode, frozenset[Permission]] = {
             Permission.view_catalogs,
             Permission.manage_equipment,
             Permission.assign_equipment,
-            Permission.process_tickets,
-            Permission.create_tickets,
             Permission.conduct_inventory,
             Permission.prepare_writeoff,
         }
     ),
     RoleCode.head: frozenset(
-        {Permission.approve_writeoff, Permission.view_reports, Permission.view_catalogs, Permission.create_tickets}
+        {Permission.approve_writeoff, Permission.view_reports, Permission.view_catalogs}
     ),
-    RoleCode.dept_head: frozenset({Permission.create_tickets, Permission.view_reports, Permission.view_catalogs}),
-    RoleCode.employee: frozenset({Permission.create_tickets}),
+    RoleCode.dept_head: frozenset({Permission.view_reports, Permission.view_catalogs}),
+    RoleCode.employee: frozenset(),
 }
 
 ROLE_SCOPE: dict[RoleCode, DataScope] = {

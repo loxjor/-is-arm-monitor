@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models import AppUser, Building, Department, Employee, Room, Ticket, TicketStatus, Workplace
+from app.models import AppUser, Building, Department, Employee, Room, Workplace
 from app.core.security import hash_password, verify_password
 from app.schemas.profile import DepartmentBrief, PasswordChange, PersonBrief, Profile, ProfileUpdate, Territory
 from app.services import audit_service, equipment_service
@@ -85,13 +85,6 @@ def get_profile(db: Session, user: AppUser) -> Profile:
         ).tuples()
     ]
 
-    open_tickets = db.scalar(
-        select(func.count()).select_from(Ticket).where(
-            Ticket.requester_id == employee.employee_id,
-            Ticket.status.not_in([TicketStatus.closed, TicketStatus.rejected]),
-        )
-    ) or 0
-
     return Profile(
         login=user.login,
         role_name=user.role.name,
@@ -107,5 +100,4 @@ def get_profile(db: Session, user: AppUser) -> Profile:
         head=_person(department.head) if department.head else None,
         territories=territories,
         equipment=equipment,
-        open_tickets=open_tickets,
     )

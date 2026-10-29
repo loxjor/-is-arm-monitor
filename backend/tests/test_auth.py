@@ -41,7 +41,7 @@ def test_me_returns_permissions_and_scope(client: TestClient) -> None:
     body = client.get("/api/v1/auth/me", headers=login(client, "depthead")).json()
     assert body["role"]["code"] == "dept_head"
     assert body["scope"] == "department"
-    assert "create_tickets" in body["permissions"]
+    assert "view_reports" in body["permissions"]
     assert "manage_users" not in body["permissions"]
 
 

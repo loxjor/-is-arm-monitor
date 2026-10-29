@@ -21,27 +21,6 @@ class AssignmentOperation(str, enum.Enum):
     return_ = "return"
 
 
-class TicketType(str, enum.Enum):
-    install = "install"
-    move = "move"
-    service = "service"
-    repair = "repair"
-
-
-class TicketPriority(str, enum.Enum):
-    low = "low"
-    normal = "normal"
-    high = "high"
-
-
-class TicketStatus(str, enum.Enum):
-    new = "new"
-    in_progress = "in_progress"
-    done = "done"
-    rejected = "rejected"
-    closed = "closed"
-
-
 class InventoryStatus(str, enum.Enum):
     open = "open"
     closed = "closed"

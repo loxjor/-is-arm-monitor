@@ -1,6 +1,5 @@
-import type { AssignmentRecord, EquipmentStatus, TicketPriority, TicketStatus, TicketType } from './api/types';
+import type { AssignmentRecord, EquipmentStatus } from './api/types';
 import { StatusBadge, type StatusKind } from '../design/components';
-import { h } from './ui/dom';
 
 export const STATUS_LABELS: Record<EquipmentStatus, string> = {
   in_stock: 'На складе',
@@ -47,8 +46,6 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
 export const ENTITY_LABELS: Record<string, string> = {
   app_user: 'Пользователь',
   equipment: 'Оборудование',
-  ticket: 'Заявка',
-  ticket_work: 'Работа по заявке',
   department: 'Подразделение',
   employee: 'Сотрудник',
   building: 'Здание',
@@ -60,41 +57,3 @@ export const ENTITY_LABELS: Record<string, string> = {
   operating_system: 'ОС',
 };
 
-export const TICKET_TYPE_LABELS: Record<TicketType, string> = {
-  install: 'Установка',
-  move: 'Перемещение',
-  service: 'Обслуживание',
-  repair: 'Ремонт',
-};
-
-export const TICKET_PRIORITY_LABELS: Record<TicketPriority, string> = {
-  low: 'Низкий',
-  normal: 'Обычный',
-  high: 'Высокий',
-};
-
-export const TICKET_STATUS_LABELS: Record<TicketStatus, string> = {
-  new: 'Новая',
-  in_progress: 'В работе',
-  done: 'Выполнена',
-  rejected: 'Отклонена',
-  closed: 'Закрыта',
-};
-
-export const TICKET_STATUS_ORDER: TicketStatus[] = ['new', 'in_progress', 'done', 'closed', 'rejected'];
-
-const TICKET_STATUS_KIND: Record<TicketStatus, StatusKind> = {
-  new: 'reserved',
-  in_progress: 'occupied',
-  done: 'free',
-  closed: 'neutral',
-  rejected: 'neutral',
-};
-
-export function ticketBadge(status: TicketStatus): HTMLElement {
-  return StatusBadge(TICKET_STATUS_KIND[status], TICKET_STATUS_LABELS[status]);
-}
-
-export function priorityMark(priority: TicketPriority): HTMLElement | string {
-  return priority === 'high' ? h('strong', { class: 'text-danger' }, 'Высокий') : TICKET_PRIORITY_LABELS[priority];
-}

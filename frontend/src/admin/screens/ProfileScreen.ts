@@ -1,7 +1,6 @@
 import { SpecRow, SpecTile } from '../../design/components';
 import { ApiError, api } from '../api/client';
 import type { EquipmentListItem, PersonBrief, Profile } from '../api/types';
-import { can } from '../auth';
 import { statusBadge } from '../labels';
 import { dash, h, type Child } from '../ui/dom';
 import { Form } from '../ui/Form';
@@ -134,14 +133,7 @@ export class ProfileScreen implements Screen {
         h('section', { class: 'card' }, h('h2', null, 'Территория'), h('div', null, territory)),
       ),
       h('section', { class: 'card' },
-        h('div', { class: 'section-head' },
-          h('h2', null, `Техника на моём АРМ (${profile.equipment.length})`),
-          h('div', { class: 'actions' },
-            h('a', { class: 'arm-btn arm-btn-light', href: '#/tickets' },
-              profile.open_tickets ? `Мои заявки · открыто ${profile.open_tickets}` : 'Мои заявки'),
-            can('create_tickets') ? h('a', { class: 'arm-btn', href: '#/tickets/new' }, 'Создать заявку') : null,
-          ),
-        ),
+        h('h2', null, `Техника на моём АРМ (${profile.equipment.length})`),
         profile.equipment.length
           ? h('div', { class: 'catalog' }, profile.equipment.map(equipmentTile))
           : h('p', { class: 'muted' }, 'За вами пока не закреплено оборудование.'),
