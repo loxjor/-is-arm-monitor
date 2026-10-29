@@ -7,14 +7,16 @@ const BASE_SCALE = 2;
  * Рендерит первую страницу PDF в PNG (data URL) — подложку плана. Белый фон
  * подкладывается заранее: у векторного PDF без фона страница осталась бы
  * прозрачной и потерялась бы на тёмной теме редактора. pdf.js подключается
- * лениво, чтобы не раздувать основной бандл: он нужен только при загрузке PDF.
+ * лениво, чтобы не раздувать основной бандл; воркер бандлится Vite'ом через
+ * ?worker (классический IIFE-воркер), поэтому не зависит от MIME-типа .mjs,
+ * который отдаёт сервер.
  */
 export async function renderPdfToImage(file: File): Promise<string> {
-  const [pdfjs, { default: workerUrl }] = await Promise.all([
+  const [pdfjs, { default: PdfWorker }] = await Promise.all([
     import('pdfjs-dist'),
-    import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    import('pdfjs-dist/build/pdf.worker.min.mjs?worker'),
   ]);
-  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+  pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
 
   const data = await file.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data }).promise;
